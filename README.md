@@ -82,6 +82,10 @@ Run the SQL in this order:
 2. `supabase/rls.sql`
 3. `supabase/seed.sql` for the starter org/channel rows
 
+Both `schema.sql` and `rls.sql` are idempotent — re-run them after pulling changes, in that order (`rls.sql` references the `org_invites` table that `schema.sql` creates).
+
+`rls.sql` fixes two problems in the original policies. The `current_org_id()` helpers now run as `SECURITY DEFINER`: they read `org_users`, and the policy on `org_users` calls them, so without it Postgres aborts with *infinite recursion detected in policy for relation org_users*. And the `FOR ALL` policies were split into separate insert/update/delete policies — because permissive policies are OR'd together, a `FOR ALL` policy also granted `SELECT`, which handed agents read access to every conversation in the org and made the visibility rule above it dead code.
+
 `schema.sql` is idempotent, so re-run it after pulling changes. It adds `conversations.last_inbound_at` (the WhatsApp 24-hour window anchor) and two unique indexes: one on `(platform, external_account_id)` for webhook routing, and one on `messages.platform_message_id` so redelivered webhooks cannot duplicate a message.
 
 The schema follows the spec from `docs/base.md`:
@@ -158,8 +162,9 @@ This scaffold does not yet implement the full auth flow. It is structured so aut
 
 ## Current limitations
 
-- **No auth.** `/inbox`, `/admin/*`, and `/api/send-message` are unauthenticated. Anyone who can reach the app can read conversations and send messages as your brand. The RLS policies in `supabase/rls.sql` are written but not exercised, because every query uses the service role key, which bypasses RLS. Do not deploy this publicly until auth lands.
+- Invites are not emailed — the admin copies the `/join/<token>` link manually.
 - Channel connection is manual: insert a `channels` row yourself. There is no OAuth connect flow.
+- One workspace per account. Accepting an invite while already a member of another org is rejected rather than supported.
 - Assignment, internal notes, and channel setup render read-only; the CRUD actions are not wired.
 - WhatsApp sends text only. Template messages (needed outside the 24-hour window) and media sends are not implemented.
 - LINE webhook verification uses a single `LINE_CHANNEL_SECRET`, so one LINE channel per deployment. Meta platforms sign with one app secret and support multiple accounts already.
@@ -167,10 +172,10 @@ This scaffold does not yet implement the full auth flow. It is structured so aut
 
 ## Next implementation steps
 
-1. Add Supabase Auth pages, session middleware, and the org invite flow, then switch reads to the signed-in user's token so the existing RLS policies take effect.
-2. Add the Meta OAuth connect flow so admins can attach a Page/IG account without hand-writing rows.
+1. Add the Meta OAuth connect flow so admins can attach a Page/IG account without hand-writing rows.
+2. Send invite emails instead of surfacing a copyable link.
 3. Implement template and media sends for WhatsApp Cloud API.
-4. Wire admin CRUD for channels and agents.
+4. Wire admin CRUD for channels.
 5. Add note creation and assignment actions in the inbox.
 
 ## Notes for production
