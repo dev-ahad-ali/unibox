@@ -1,41 +1,38 @@
--- Minimal starter seed for a single-org setup.
--- Replace `<your-auth-user-id>` with the UUID from Supabase Auth for the account
--- you want to make an admin.
-
-insert into organizations (id, name)
-values ('11111111-1111-1111-1111-111111111111', 'Unibox Demo Org')
-on conflict (id) do nothing;
-
-insert into org_users (id, org_id, auth_user_id, role, display_name)
-values (
-  '22222222-2222-2222-2222-222222222222',
-  '11111111-1111-1111-1111-111111111111',
-  '<your-auth-user-id>',
-  'admin',
-  'Your Name'
-)
-on conflict (id) do nothing;
+-- Optional starter data.
+--
+-- You no longer need to seed an organization or an admin by hand: signing up at
+-- /signup creates the organization and makes you its first admin. This file is
+-- only for attaching a channel to an org that already exists.
+--
+-- Find your org id first:
+--   select id, name from organizations;
+--
+-- The access token must be encrypted with APP_ENCRYPTION_KEY before it is
+-- stored. Generate the ciphertext with:
+--
+--   node -e "process.env.APP_ENCRYPTION_KEY='<your key>'; \
+--     import('./lib/crypto.ts').then(m => console.log(m.encryptSecret('<token>')))"
+--
+-- Storing a raw token here will not work: decryptSecret() only accepts the
+-- v1:iv:tag:ciphertext envelope and returns null for anything else, so the
+-- adapter would silently fall back to the platform env var.
 
 insert into channels (
-  id,
   org_id,
   platform,
   display_name,
   external_account_id,
   access_token_encrypted,
-  webhook_secret,
-  status,
-  connected_by
+  status
 )
 values (
-  '33333333-3333-3333-3333-333333333333',
-  '11111111-1111-1111-1111-111111111111',
-  'messenger',
-  'Starter Messenger Channel',
-  'page_123456',
-  'replace-with-encrypted-token',
-  'replace-with-webhook-secret',
-  'active',
-  '22222222-2222-2222-2222-222222222222'
+  '<your-org-id>',
+  'line',
+  'Tokyo Support - LINE',
+  -- For LINE this is the bot's own user id, which arrives as `destination` on
+  -- every webhook. Read it from GET https://api.line.me/v2/bot/info.
+  '<your-line-destination-id>',
+  '<v1:...encrypted token...>',
+  'active'
 )
-on conflict (id) do nothing;
+on conflict (platform, external_account_id) do nothing;
