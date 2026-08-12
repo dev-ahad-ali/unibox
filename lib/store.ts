@@ -1,7 +1,9 @@
 import { randomUUID } from "node:crypto";
+import { decryptSecret } from "@/lib/crypto";
 import { demoChannels, demoConversations, demoMessages, demoNotes, demoOrg, demoUsers } from "@/lib/mock-data";
 import { createServerSupabaseClient } from "@/lib/supabase";
 import type {
+  AuthorizedChannel,
   Channel,
   Conversation,
   ConversationStatus,
@@ -49,6 +51,7 @@ type ConversationRow = {
   assigned_agent_id: string | null;
   status: ConversationStatus;
   last_message_at: string | null;
+  last_inbound_at: string | null;
   created_at: string | null;
 };
 
@@ -87,6 +90,7 @@ type NewConversationInput = {
   channelId: string;
   externalContactId: string;
   contactName?: string;
+  contactAvatarUrl?: string;
 };
 
 type NewMessageInput = {
@@ -103,6 +107,18 @@ type NewMessageInput = {
 
 const client = createServerSupabaseClient();
 
+// Column lists are named so that credential columns (access_token_encrypted,
+// webhook_secret) can never leak into a query that feeds the UI.
+const ORGANIZATION_COLUMNS = "id, name, created_at";
+const ORG_USER_COLUMNS = "id, org_id, auth_user_id, role, display_name, created_at";
+const CHANNEL_COLUMNS =
+  "id, org_id, platform, display_name, external_account_id, status, connected_by, created_at";
+const CONVERSATION_COLUMNS =
+  "id, org_id, channel_id, external_contact_id, contact_name, contact_avatar_url, assigned_agent_id, status, last_message_at, last_inbound_at, created_at";
+const MESSAGE_COLUMNS =
+  "id, conversation_id, direction, sender_type, sender_id, body, media_url, media_type, platform_message_id, status, created_at";
+const NOTE_COLUMNS = "id, conversation_id, author_id, body, created_at";
+
 declare global {
   // eslint-disable-next-line no-var
   var __unibox_store: {
@@ -117,6 +133,19 @@ declare global {
 
 function clone<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T;
+}
+
+/**
+ * A failed query used to fall back to demo data silently, which made a missing
+ * column look like an empty inbox. Log it instead so the cause is visible.
+ */
+function reportQueryError(table: string, error: { message?: string } | null) {
+  if (!error) {
+    return false;
+  }
+
+  console.error(`[unibox] Supabase query on "${table}" failed: ${error.message ?? "unknown error"}`);
+  return true;
 }
 
 function createInitialState() {
@@ -178,6 +207,7 @@ function toConversation(row: ConversationRow): Conversation {
     assignedAgentId: row.assigned_agent_id,
     status: row.status,
     lastMessageAt: row.last_message_at ?? undefined,
+    lastInboundAt: row.last_inbound_at ?? undefined,
     createdAt: row.created_at ?? new Date().toISOString()
   };
 }
@@ -215,7 +245,7 @@ async function getActiveOrganizationRow() {
 
   const { data, error } = await client
     .from("organizations")
-    .select("id, name, created_at")
+    .select(ORGANIZATION_COLUMNS)
     .order("created_at", { ascending: true })
     .limit(1)
     .maybeSingle<OrganizationRow>();
@@ -245,7 +275,7 @@ async function getOrgSnapshotFromSupabase(platformFilter?: Platform): Promise<St
   const orgId = organizationRow.id;
   const channelQuery = client
     .from("channels")
-    .select("id, org_id, platform, display_name, external_account_id, status, connected_by, created_at")
+    .select(CHANNEL_COLUMNS)
     .eq("org_id", orgId)
     .order("created_at", { ascending: false });
 
@@ -253,7 +283,7 @@ async function getOrgSnapshotFromSupabase(platformFilter?: Platform): Promise<St
     ? await channelQuery.eq("platform", platformFilter)
     : await channelQuery;
 
-  if (channelsResult.error) {
+  if (reportQueryError("channels", channelsResult.error)) {
     return null;
   }
 
@@ -263,14 +293,14 @@ async function getOrgSnapshotFromSupabase(platformFilter?: Platform): Promise<St
     ? await client
         .from("conversations")
         .select(
-          "id, org_id, channel_id, external_contact_id, contact_name, contact_avatar_url, assigned_agent_id, status, last_message_at, created_at"
+          CONVERSATION_COLUMNS
         )
         .eq("org_id", orgId)
         .in("channel_id", channelIds)
         .order("last_message_at", { ascending: false, nullsFirst: false })
     : { data: [], error: null };
 
-  if (conversationsResult.error) {
+  if (reportQueryError("conversations", conversationsResult.error)) {
     return null;
   }
 
@@ -280,14 +310,14 @@ async function getOrgSnapshotFromSupabase(platformFilter?: Platform): Promise<St
   const [usersResult, messagesResult, notesResult] = await Promise.all([
     client
       .from("org_users")
-      .select("id, org_id, auth_user_id, role, display_name, created_at")
+      .select(ORG_USER_COLUMNS)
       .eq("org_id", orgId)
       .order("created_at", { ascending: true }),
     conversationIds.length
       ? client
           .from("messages")
           .select(
-            "id, conversation_id, direction, sender_type, sender_id, body, media_url, media_type, platform_message_id, status, created_at"
+            MESSAGE_COLUMNS
           )
           .in("conversation_id", conversationIds)
           .order("created_at", { ascending: true })
@@ -295,13 +325,17 @@ async function getOrgSnapshotFromSupabase(platformFilter?: Platform): Promise<St
     conversationIds.length
       ? client
           .from("internal_notes")
-          .select("id, conversation_id, author_id, body, created_at")
+          .select(NOTE_COLUMNS)
           .in("conversation_id", conversationIds)
           .order("created_at", { ascending: true })
       : Promise.resolve({ data: [], error: null } as const)
   ]);
 
-  if (usersResult.error || messagesResult.error || notesResult.error) {
+  if (
+    reportQueryError("org_users", usersResult.error) ||
+    reportQueryError("messages", messagesResult.error) ||
+    reportQueryError("internal_notes", notesResult.error)
+  ) {
     return null;
   }
 
@@ -338,8 +372,27 @@ function getDemoSnapshotSync(platformFilter?: Platform): StoreSnapshot {
 }
 
 async function getSnapshot(platformFilter?: Platform): Promise<StoreSnapshot> {
+  // Demo data is a fallback for "no Supabase configured", not for "Supabase
+  // returned an error" — mixing seeded rows into a live deployment hides real
+  // failures behind plausible-looking content.
+  if (!client) {
+    return getDemoSnapshotSync(platformFilter);
+  }
+
   const snapshot = await getOrgSnapshotFromSupabase(platformFilter);
-  return snapshot ?? getDemoSnapshotSync(platformFilter);
+  if (snapshot) {
+    return snapshot;
+  }
+
+  const organizationRow = await getActiveOrganizationRow();
+  return {
+    organization: organizationRow ? toOrganization(organizationRow) : { ...demoOrg, name: "Unknown organization" },
+    users: [],
+    channels: [],
+    conversations: [],
+    messages: [],
+    notes: []
+  };
 }
 
 export async function getDemoSnapshot(platformFilter?: Platform) {
@@ -354,7 +407,7 @@ export async function findConversation(conversationId: string): Promise<Conversa
   const { data, error } = await client
     .from("conversations")
     .select(
-      "id, org_id, channel_id, external_contact_id, contact_name, contact_avatar_url, assigned_agent_id, status, last_message_at, created_at"
+      CONVERSATION_COLUMNS
     )
     .eq("id", conversationId)
     .maybeSingle<ConversationRow>();
@@ -373,7 +426,7 @@ export async function findChannel(channelId: string): Promise<Channel | undefine
 
   const { data, error } = await client
     .from("channels")
-    .select("id, org_id, platform, display_name, external_account_id, status, connected_by, created_at")
+    .select(CHANNEL_COLUMNS)
     .eq("id", channelId)
     .maybeSingle<ChannelRow>();
 
@@ -392,7 +445,7 @@ export async function findChannelByPlatform(platform: Platform): Promise<Channel
   const orgId = await getActiveOrganizationId();
   const { data, error } = await client
     .from("channels")
-    .select("id, org_id, platform, display_name, external_account_id, status, connected_by, created_at")
+    .select(CHANNEL_COLUMNS)
     .eq("org_id", orgId)
     .eq("platform", platform)
     .order("created_at", { ascending: false })
@@ -406,6 +459,111 @@ export async function findChannelByPlatform(platform: Platform): Promise<Channel
   return toChannel(data);
 }
 
+/**
+ * Resolves the channel a webhook event belongs to. Matching on the platform's
+ * own account id (Page id, WhatsApp phone number id, LINE destination) is what
+ * keeps two accounts on the same platform from colliding; the platform-only
+ * lookup is a fallback for single-account setups and local testing.
+ */
+export async function findChannelForEvent(
+  platform: Platform,
+  accountId?: string
+): Promise<Channel | undefined> {
+  if (!accountId) {
+    return findChannelByPlatform(platform);
+  }
+
+  if (!client) {
+    const state = getDemoState();
+    return (
+      state.channels.find(
+        channel => channel.platform === platform && channel.externalAccountId === accountId
+      ) ?? state.channels.find(channel => channel.platform === platform)
+    );
+  }
+
+  const { data } = await client
+    .from("channels")
+    .select(CHANNEL_COLUMNS)
+    .eq("platform", platform)
+    .eq("external_account_id", accountId)
+    .limit(1)
+    .maybeSingle<ChannelRow>();
+
+  return data ? toChannel(data) : findChannelByPlatform(platform);
+}
+
+/**
+ * Loads a channel together with its decrypted credentials. Server-only — the
+ * result must never be returned to a page or serialized to the client.
+ */
+export async function authorizeChannel(channel: Channel): Promise<AuthorizedChannel> {
+  if (!client) {
+    return { ...channel, credentials: {} };
+  }
+
+  const { data } = await client
+    .from("channels")
+    .select("access_token_encrypted, webhook_secret")
+    .eq("id", channel.id)
+    .maybeSingle<{ access_token_encrypted: string | null; webhook_secret: string | null }>();
+
+  return {
+    ...channel,
+    credentials: {
+      accessToken: decryptSecret(data?.access_token_encrypted) ?? undefined,
+      webhookSecret: decryptSecret(data?.webhook_secret) ?? undefined
+    }
+  };
+}
+
+/** Meta retries a webhook until it gets a 200, so ingestion must be idempotent. */
+export async function messageExists(platformMessageId: string): Promise<boolean> {
+  if (!platformMessageId) {
+    return false;
+  }
+
+  if (!client) {
+    return getDemoState().messages.some(
+      message => message.platformMessageId === platformMessageId
+    );
+  }
+
+  const { data } = await client
+    .from("messages")
+    .select("id")
+    .eq("platform_message_id", platformMessageId)
+    .limit(1)
+    .maybeSingle<{ id: string }>();
+
+  return Boolean(data);
+}
+
+/** Applies a delivery/read receipt to the outbound message it refers to. */
+export async function updateMessageStatus(
+  platformMessageId: string,
+  status: MessageStatus
+): Promise<Message | undefined> {
+  if (!client) {
+    const message = getDemoState().messages.find(
+      entry => entry.platformMessageId === platformMessageId
+    );
+    if (message) {
+      message.status = status;
+    }
+    return message;
+  }
+
+  const { data } = await client
+    .from("messages")
+    .update({ status })
+    .eq("platform_message_id", platformMessageId)
+    .select(MESSAGE_COLUMNS)
+    .maybeSingle<MessageRow>();
+
+  return data ? toMessage(data) : undefined;
+}
+
 export async function findUser(userId: string): Promise<OrgUser | undefined> {
   if (!client) {
     return getDemoState().users.find(user => user.id === userId);
@@ -413,7 +571,7 @@ export async function findUser(userId: string): Promise<OrgUser | undefined> {
 
   const { data, error } = await client
     .from("org_users")
-    .select("id, org_id, auth_user_id, role, display_name, created_at")
+    .select(ORG_USER_COLUMNS)
     .eq("id", userId)
     .maybeSingle<OrgUserRow>();
 
@@ -434,7 +592,7 @@ export async function getMessagesForConversation(conversationId: string): Promis
   const { data, error } = await client
     .from("messages")
     .select(
-      "id, conversation_id, direction, sender_type, sender_id, body, media_url, media_type, platform_message_id, status, created_at"
+      MESSAGE_COLUMNS
     )
     .eq("conversation_id", conversationId)
     .order("created_at", { ascending: true });
@@ -455,7 +613,7 @@ export async function getNotesForConversation(conversationId: string): Promise<I
 
   const { data, error } = await client
     .from("internal_notes")
-    .select("id, conversation_id, author_id, body, created_at")
+    .select(NOTE_COLUMNS)
     .eq("conversation_id", conversationId)
     .order("created_at", { ascending: true });
 
@@ -479,6 +637,9 @@ export async function upsertConversation(input: NewConversationInput): Promise<C
       if (input.contactName && existing.contactName !== input.contactName) {
         existing.contactName = input.contactName;
       }
+      if (input.contactAvatarUrl && existing.contactAvatarUrl !== input.contactAvatarUrl) {
+        existing.contactAvatarUrl = input.contactAvatarUrl;
+      }
       return existing;
     }
 
@@ -488,6 +649,7 @@ export async function upsertConversation(input: NewConversationInput): Promise<C
       channelId: input.channelId,
       externalContactId: input.externalContactId,
       contactName: input.contactName || input.externalContactId,
+      contactAvatarUrl: input.contactAvatarUrl,
       status: "open",
       createdAt: new Date().toISOString()
     };
@@ -502,25 +664,33 @@ export async function upsertConversation(input: NewConversationInput): Promise<C
   const existingResult = await client
     .from("conversations")
     .select(
-      "id, org_id, channel_id, external_contact_id, contact_name, contact_avatar_url, assigned_agent_id, status, last_message_at, created_at"
+      CONVERSATION_COLUMNS
     )
     .eq("channel_id", input.channelId)
     .eq("external_contact_id", input.externalContactId)
     .maybeSingle<ConversationRow>();
 
   if (existingResult.data) {
+    const patch: Record<string, string> = {};
     if (input.contactName && existingResult.data.contact_name !== input.contactName) {
-      await client
-        .from("conversations")
-        .update({ contact_name: input.contactName })
-        .eq("id", existingResult.data.id);
-      return {
-        ...toConversation(existingResult.data),
-        contactName: input.contactName
-      };
+      patch.contact_name = input.contactName;
+    }
+    if (input.contactAvatarUrl && existingResult.data.contact_avatar_url !== input.contactAvatarUrl) {
+      patch.contact_avatar_url = input.contactAvatarUrl;
     }
 
-    return toConversation(existingResult.data);
+    if (Object.keys(patch).length === 0) {
+      return toConversation(existingResult.data);
+    }
+
+    const { data } = await client
+      .from("conversations")
+      .update(patch)
+      .eq("id", existingResult.data.id)
+      .select(CONVERSATION_COLUMNS)
+      .maybeSingle<ConversationRow>();
+
+    return toConversation(data ?? { ...existingResult.data, ...patch });
   }
 
   const { data, error } = await client
@@ -530,10 +700,11 @@ export async function upsertConversation(input: NewConversationInput): Promise<C
       channel_id: input.channelId,
       external_contact_id: input.externalContactId,
       contact_name: input.contactName ?? input.externalContactId,
+      contact_avatar_url: input.contactAvatarUrl ?? null,
       status: "open"
     })
     .select(
-      "id, org_id, channel_id, external_contact_id, contact_name, contact_avatar_url, assigned_agent_id, status, last_message_at, created_at"
+      CONVERSATION_COLUMNS
     )
     .single<ConversationRow>();
 
@@ -568,6 +739,7 @@ export async function insertMessage(input: NewMessageInput): Promise<Message> {
       conversation.lastMessageAt = message.createdAt;
       if (input.direction === "inbound") {
         conversation.status = "open";
+        conversation.lastInboundAt = message.createdAt;
       }
     }
 
@@ -588,7 +760,7 @@ export async function insertMessage(input: NewMessageInput): Promise<Message> {
       status: input.status ?? "sent"
     })
     .select(
-      "id, conversation_id, direction, sender_type, sender_id, body, media_url, media_type, platform_message_id, status, created_at"
+      MESSAGE_COLUMNS
     )
     .single<MessageRow>();
 
@@ -600,7 +772,10 @@ export async function insertMessage(input: NewMessageInput): Promise<Message> {
     .from("conversations")
     .update({
       last_message_at: data.created_at,
-      ...(input.direction === "inbound" ? { status: "open" } : {})
+      // last_inbound_at anchors the WhatsApp 24-hour customer service window.
+      ...(input.direction === "inbound"
+        ? { status: "open", last_inbound_at: data.created_at }
+        : {})
     })
     .eq("id", input.conversationId);
 
@@ -628,7 +803,7 @@ export async function addNote(conversationId: string, authorId: string, body: st
       author_id: authorId,
       body
     })
-    .select("id, conversation_id, author_id, body, created_at")
+    .select(NOTE_COLUMNS)
     .single<InternalNoteRow>();
 
   if (error || !data) {
@@ -655,7 +830,7 @@ export async function updateConversationStatus(
     .update({ status })
     .eq("id", conversationId)
     .select(
-      "id, org_id, channel_id, external_contact_id, contact_name, contact_avatar_url, assigned_agent_id, status, last_message_at, created_at"
+      CONVERSATION_COLUMNS
     )
     .maybeSingle<ConversationRow>();
 
@@ -683,7 +858,7 @@ export async function assignConversation(
     .update({ assigned_agent_id: assignedAgentId })
     .eq("id", conversationId)
     .select(
-      "id, org_id, channel_id, external_contact_id, contact_name, contact_avatar_url, assigned_agent_id, status, last_message_at, created_at"
+      CONVERSATION_COLUMNS
     )
     .maybeSingle<ConversationRow>();
 
@@ -729,7 +904,7 @@ export async function getConversationBundle(conversationId: string) {
     getActiveOrganizationRow(),
     client
       .from("org_users")
-      .select("id, org_id, auth_user_id, role, display_name, created_at")
+      .select(ORG_USER_COLUMNS)
       .eq("org_id", conversation.orgId)
       .order("created_at", { ascending: true }),
     findChannel(conversation.channelId),

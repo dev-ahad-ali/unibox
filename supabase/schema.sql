@@ -38,6 +38,8 @@ create table if not exists conversations (
   assigned_agent_id uuid references org_users(id),
   status text default 'open' check (status in ('open', 'pending', 'closed')),
   last_message_at timestamptz,
+  -- Anchors the WhatsApp 24-hour customer service window.
+  last_inbound_at timestamptz,
   created_at timestamptz default now(),
   unique(channel_id, external_contact_id)
 );
@@ -64,8 +66,19 @@ create table if not exists internal_notes (
   created_at timestamptz default now()
 );
 
+-- Migration helper for databases created before last_inbound_at existed.
+alter table conversations add column if not exists last_inbound_at timestamptz;
+
 create index if not exists idx_org_users_org on org_users(org_id);
 create index if not exists idx_channels_org on channels(org_id);
+-- One row per platform account: webhook routing matches on this pair.
+create unique index if not exists idx_channels_platform_account
+  on channels(platform, external_account_id);
+-- Platforms redeliver webhooks until they see a 200, so ingestion has to be
+-- idempotent on the platform's own message id.
+create unique index if not exists idx_messages_platform_id
+  on messages(platform_message_id)
+  where platform_message_id is not null;
 create index if not exists idx_conversations_org on conversations(org_id);
 create index if not exists idx_conversations_channel_contact on conversations(channel_id, external_contact_id);
 create index if not exists idx_messages_conversation on messages(conversation_id, created_at);

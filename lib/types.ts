@@ -37,6 +37,18 @@ export interface Channel {
   createdAt: string;
 }
 
+/**
+ * Credentials are resolved server-side only (decrypted from
+ * `channels.access_token_encrypted`) and are never part of the plain `Channel`
+ * shape that reaches a page or an agent-facing query.
+ */
+export interface ChannelCredentials {
+  accessToken?: string;
+  webhookSecret?: string;
+}
+
+export type AuthorizedChannel = Channel & { credentials: ChannelCredentials };
+
 export interface Conversation {
   id: string;
   orgId: string;
@@ -47,6 +59,7 @@ export interface Conversation {
   assignedAgentId?: string | null;
   status: ConversationStatus;
   lastMessageAt?: string;
+  lastInboundAt?: string;
   createdAt: string;
 }
 
@@ -73,6 +86,12 @@ export interface InternalNote {
 }
 
 export interface NormalizedMessage {
+  /**
+   * The platform account the message arrived on — Page id, WhatsApp phone
+   * number id, or LINE destination. Used to route to the right `channels` row
+   * when an org has more than one account on the same platform.
+   */
+  accountId?: string;
   externalContactId: string;
   contactName?: string;
   body?: string;
@@ -82,22 +101,44 @@ export interface NormalizedMessage {
   timestamp: Date;
 }
 
+/** A delivery/read receipt for a message we sent earlier. */
+export interface DeliveryStatusUpdate {
+  accountId?: string;
+  platformMessageId: string;
+  status: MessageStatus;
+  timestamp: Date;
+}
+
+export interface ParsedWebhook {
+  messages: NormalizedMessage[];
+  statuses: DeliveryStatusUpdate[];
+}
+
 export interface OutboundMessage {
   body: string;
   mediaUrl?: string;
   mediaType?: string;
 }
 
+/**
+ * Signature verification needs the exact bytes the platform signed, so the raw
+ * body travels alongside the request rather than inside it.
+ */
+export interface WebhookContext {
+  request: Request;
+  rawBody: string;
+}
+
 export interface ChannelAdapter {
-  verifyWebhook(request: Request): Promise<boolean> | boolean;
-  parseIncoming(payload: unknown): NormalizedMessage[];
+  verifyWebhook(context: WebhookContext): Promise<boolean> | boolean;
+  parseIncoming(payload: unknown): ParsedWebhook;
   sendMessage(
-    channel: Channel,
+    channel: AuthorizedChannel,
     externalContactId: string,
     message: OutboundMessage
   ): Promise<{ platformMessageId: string }>;
   fetchContactProfile?(
-    channel: Channel,
+    channel: AuthorizedChannel,
     externalContactId: string
   ): Promise<{ name: string; avatarUrl?: string }>;
 }

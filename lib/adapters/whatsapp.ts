@@ -1,5 +1,16 @@
-import { createHmac, randomUUID, timingSafeEqual } from "node:crypto";
-import type { Channel, ChannelAdapter, NormalizedMessage, OutboundMessage } from "@/lib/types";
+import { randomUUID } from "node:crypto";
+import { graphRequest, verifyMetaSignature } from "@/lib/adapters/graph";
+import type {
+  AuthorizedChannel,
+  ChannelAdapter,
+  DeliveryStatusUpdate,
+  MessageStatus,
+  NormalizedMessage,
+  OutboundMessage,
+  ParsedWebhook
+} from "@/lib/types";
+
+type WhatsAppMedia = { id?: string; mime_type?: string; caption?: string; filename?: string };
 
 type WhatsAppMessage = {
   id?: string;
@@ -7,11 +18,11 @@ type WhatsAppMessage = {
   timestamp?: string;
   type?: string;
   text?: { body?: string };
-  image?: { id?: string; caption?: string; mime_type?: string };
-  video?: { id?: string; caption?: string; mime_type?: string };
-  audio?: { id?: string; mime_type?: string };
-  document?: { id?: string; caption?: string; mime_type?: string; filename?: string };
-  sticker?: { id?: string; mime_type?: string };
+  image?: WhatsAppMedia;
+  video?: WhatsAppMedia;
+  audio?: WhatsAppMedia;
+  document?: WhatsAppMedia;
+  sticker?: WhatsAppMedia;
   location?: { latitude?: number; longitude?: number; name?: string; address?: string };
   button?: { text?: string; payload?: string };
   interactive?: {
@@ -21,6 +32,15 @@ type WhatsAppMessage = {
   };
 };
 
+type WhatsAppStatus = {
+  id?: string;
+  status?: string;
+  timestamp?: string;
+  recipient_id?: string;
+  errors?: Array<{ title?: string; message?: string }>;
+};
+
+/** WhatsApp timestamps are epoch *seconds*, unlike the rest of the Graph API. */
 function toDate(value: unknown) {
   const seconds = typeof value === "string" ? Number(value) : value;
   return typeof seconds === "number" && Number.isFinite(seconds)
@@ -45,37 +65,73 @@ function messageBody(message: WhatsAppMessage) {
   return message.type ? `[${message.type}]` : undefined;
 }
 
+/**
+ * Cloud API hands us a media *id*, not a URL, and the download URL it resolves
+ * to is short-lived and requires the access token. We store a link to our own
+ * proxy route instead so the thread keeps rendering after the URL expires.
+ */
 function media(message: WhatsAppMessage) {
   const item = message.image ?? message.video ?? message.audio ?? message.document ?? message.sticker;
-  return item ? { mediaUrl: item.id, mediaType: item.mime_type ?? message.type } : {};
+  if (!item?.id) {
+    return {};
+  }
+
+  return {
+    mediaUrl: `/api/media/whatsapp/${encodeURIComponent(item.id)}`,
+    mediaType: item.mime_type ?? message.type
+  };
 }
 
-function validMetaSignature(rawBody: string, signature: string | null, secret: string) {
-  if (!signature?.startsWith("sha256=")) return false;
-  const expected = `sha256=${createHmac("sha256", secret).update(rawBody).digest("hex")}`;
-  const actualBuffer = Buffer.from(signature);
-  const expectedBuffer = Buffer.from(expected);
-  return actualBuffer.length === expectedBuffer.length && timingSafeEqual(actualBuffer, expectedBuffer);
+function toMessageStatus(status: string | undefined): MessageStatus | null {
+  switch (status) {
+    case "sent":
+      return "sent";
+    case "delivered":
+      return "delivered";
+    case "read":
+      return "read";
+    case "failed":
+      return "failed";
+    default:
+      return null;
+  }
+}
+
+function accessToken(channel: AuthorizedChannel) {
+  const token = channel.credentials.accessToken || process.env.WHATSAPP_ACCESS_TOKEN;
+  if (!token) {
+    throw new Error(
+      `No access token for WhatsApp channel "${channel.displayName}". Store one in channels.access_token_encrypted or set WHATSAPP_ACCESS_TOKEN.`
+    );
+  }
+  return token;
+}
+
+function phoneNumberId(channel: AuthorizedChannel) {
+  const id = channel.externalAccountId || process.env.WHATSAPP_PHONE_NUMBER_ID;
+  if (!id) {
+    throw new Error("WhatsApp requires a phone number id (channels.external_account_id).");
+  }
+  return id;
 }
 
 export const whatsappAdapter: ChannelAdapter = {
-  verifyWebhook(request) {
-    const appSecret = process.env.META_APP_SECRET;
-    // Meta signs WhatsApp callbacks using the app secret. Keep verification strict
-    // whenever a secret is configured; leaving it unset supports local scaffolding only.
-    return !appSecret || validMetaSignature(
-      request.headers.get("x-unibox-raw-body") ?? "",
-      request.headers.get("x-hub-signature-256"),
-      appSecret
-    );
+  verifyWebhook(context) {
+    // WhatsApp Cloud API callbacks are signed with the Meta app secret.
+    return verifyMetaSignature(context);
   },
-  parseIncoming(payload: any): NormalizedMessage[] {
-    const normalized: NormalizedMessage[] = [];
+  parseIncoming(payload: any): ParsedWebhook {
+    const messages: NormalizedMessage[] = [];
+    const statuses: DeliveryStatusUpdate[] = [];
     const entries = Array.isArray(payload?.entry) ? payload.entry : [];
 
     for (const entry of entries) {
       for (const change of Array.isArray(entry?.changes) ? entry.changes : []) {
         const value = change?.value;
+        // Route on phone_number_id, not the WABA id on `entry`, so an org with
+        // several numbers lands each thread on the right channel.
+        const accountId = value?.metadata?.phone_number_id;
+
         const contacts = new Map<string, string | undefined>(
           (Array.isArray(value?.contacts) ? value.contacts : [])
             .filter((contact: any) => contact?.wa_id)
@@ -84,7 +140,8 @@ export const whatsappAdapter: ChannelAdapter = {
 
         for (const item of (Array.isArray(value?.messages) ? value.messages : []) as WhatsAppMessage[]) {
           if (!item.from) continue;
-          normalized.push({
+          messages.push({
+            accountId,
             externalContactId: item.from,
             contactName: contacts.get(item.from),
             body: messageBody(item),
@@ -93,43 +150,58 @@ export const whatsappAdapter: ChannelAdapter = {
             ...media(item)
           });
         }
+
+        for (const item of (Array.isArray(value?.statuses) ? value.statuses : []) as WhatsAppStatus[]) {
+          const mapped = toMessageStatus(item.status);
+          if (!item.id || !mapped) continue;
+          statuses.push({
+            accountId,
+            platformMessageId: item.id,
+            status: mapped,
+            timestamp: toDate(item.timestamp)
+          });
+        }
       }
     }
 
-    return normalized;
+    return { messages, statuses };
   },
-  async sendMessage(_channel: Channel, externalContactId: string, message: OutboundMessage) {
-    const accessToken = process.env.WHATSAPP_ACCESS_TOKEN;
-    const phoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID;
-    const apiVersion = process.env.META_GRAPH_API_VERSION ?? "v23.0";
+  async sendMessage(channel: AuthorizedChannel, externalContactId: string, message: OutboundMessage) {
+    const data = await graphRequest<{ messages?: Array<{ id?: string }> }>(
+      `${phoneNumberId(channel)}/messages`,
+      {
+        method: "POST",
+        accessToken: accessToken(channel),
+        body: {
+          messaging_product: "whatsapp",
+          recipient_type: "individual",
+          to: externalContactId.replace(/^\+/, ""),
+          type: "text",
+          text: { preview_url: false, body: message.body }
+        }
+      }
+    );
 
-    if (!accessToken || !phoneNumberId) {
-      throw new Error("WhatsApp Cloud API requires WHATSAPP_ACCESS_TOKEN and WHATSAPP_PHONE_NUMBER_ID.");
-    }
-
-    const response = await fetch(`https://graph.facebook.com/${apiVersion}/${phoneNumberId}/messages`, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({
-        messaging_product: "whatsapp",
-        recipient_type: "individual",
-        to: externalContactId.replace(/^\+/, ""),
-        type: "text",
-        text: { preview_url: false, body: message.body }
-      })
-    });
-
-    const data = (await response.json().catch(() => ({}))) as {
-      messages?: Array<{ id?: string }>;
-      error?: { message?: string; code?: number };
-    };
     const platformMessageId = data.messages?.[0]?.id;
-    if (!response.ok || !platformMessageId) {
-      throw new Error(data.error?.message ?? `WhatsApp Cloud API request failed (${response.status}).`);
+    if (!platformMessageId) {
+      throw new Error("WhatsApp send succeeded but returned no message id.");
     }
+
     return { platformMessageId };
   }
 };
+
+/** Resolves a Cloud API media id to its (short-lived, authenticated) download URL. */
+export async function resolveWhatsAppMedia(channel: AuthorizedChannel, mediaId: string) {
+  const token = accessToken(channel);
+  const data = await graphRequest<{ url?: string; mime_type?: string }>(mediaId, {
+    method: "GET",
+    accessToken: token
+  });
+
+  if (!data.url) {
+    throw new Error(`WhatsApp media ${mediaId} has no download URL.`);
+  }
+
+  return { url: data.url, mimeType: data.mime_type, accessToken: token };
+}

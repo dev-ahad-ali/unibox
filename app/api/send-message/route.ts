@@ -1,5 +1,6 @@
 import { getAdapter } from "@/lib/adapters";
-import { findChannel, findConversation, findUser, insertMessage } from "@/lib/store";
+import { isWithinServiceWindow } from "@/lib/service-window";
+import { authorizeChannel, findChannel, findConversation, findUser, insertMessage } from "@/lib/store";
 import { emitConversationEvent, emitOrgEvent } from "@/lib/socket";
 
 export async function POST(request: Request) {
@@ -25,9 +26,35 @@ export async function POST(request: Request) {
     return Response.json({ error: "Channel not found for conversation" }, { status: 404 });
   }
 
+  // WhatsApp only allows free-form replies within 24 hours of the customer's
+  // last message; outside it Meta rejects anything but an approved template.
+  if (channel.platform === "whatsapp" && !isWithinServiceWindow(conversation.lastInboundAt)) {
+    return Response.json(
+      {
+        error:
+          "The 24-hour WhatsApp service window has closed for this conversation. Only an approved template message can be sent until the customer replies again.",
+        code: "service_window_closed"
+      },
+      { status: 409 }
+    );
+  }
+
   const adapter = getAdapter(channel.platform);
   const sender = body.senderId ? await findUser(body.senderId) : undefined;
-  const result = await adapter.sendMessage(channel, conversation.externalContactId, { body: body.body });
+
+  let result: { platformMessageId: string };
+  try {
+    const authorized = await authorizeChannel(channel);
+    result = await adapter.sendMessage(authorized, conversation.externalContactId, { body: body.body });
+  } catch (error) {
+    // The send failed at the platform, so no message row is written — showing a
+    // delivered-looking bubble for a message the customer never got is worse
+    // than showing the error.
+    return Response.json(
+      { error: error instanceof Error ? error.message : "Failed to send message." },
+      { status: 502 }
+    );
+  }
 
   const message = await insertMessage({
     conversationId: conversation.id,
