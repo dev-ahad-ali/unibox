@@ -1,6 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { appUrl } from "@/lib/app-url";
 import { requireRole } from "@/lib/auth";
 import { newInviteToken } from "@/lib/invites";
 import { isRole } from "@/lib/types";
@@ -52,8 +53,7 @@ export async function createInvite(
 
   // No mail is sent — the admin copies this link. Wiring an email provider is
   // the only step between this and a normal invite email.
-  const appUrl = process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000";
-  return { inviteUrl: `${appUrl}/join/${token}`, notice: `Invite created for ${email}.` };
+  return { inviteUrl: appUrl(`/join/${token}`), notice: `Invite created for ${email}.` };
 }
 
 export async function revokeInvite(

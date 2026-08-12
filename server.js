@@ -1,20 +1,47 @@
 const { createServer } = require("node:http");
+const { loadEnvConfig } = require("@next/env");
 const next = require("next");
 const { Server } = require("socket.io");
 const { createClient } = require("@supabase/supabase-js");
 
 const dev = process.env.NODE_ENV !== "production";
-const hostname = "0.0.0.0";
+
+/**
+ * Load .env* into process.env before anything reads it.
+ *
+ * Next does this itself, but not until `app.prepare()` — far too late for a
+ * custom server that must know its public hostname when it constructs the Next
+ * app, and that reads Supabase keys to authenticate socket handshakes.
+ */
+loadEnvConfig(process.cwd(), dev);
+
+// Listen on every interface so a tunnel or container can reach us...
+const bindHost = process.env.HOST || "0.0.0.0";
 const port = Number(process.env.PORT || 3000);
 
 /**
- * Reads the Supabase configuration.
- *
- * This MUST be called after `app.prepare()`. Next.js loads .env.local during
- * prepare(), so reading these at module scope returns undefined even when the
- * file is present — which silently disabled socket authentication and left
- * every client in no room at all.
+ * ...but do NOT hand "0.0.0.0" to next(). Next builds `request.url` for route
+ * handlers from the hostname it is given, so binding-address-as-hostname made
+ * every absolute URL resolve to http://0.0.0.0:<port> — which is what sent the
+ * Meta OAuth callback to https://0.0.0.0:8080/... instead of the public URL.
  */
+function appBaseUrl() {
+  return (process.env.NEXT_PUBLIC_APP_URL || `http://localhost:${port}`).replace(/\/+$/, "");
+}
+
+function publicHostname() {
+  const configured = process.env.NEXT_PUBLIC_APP_URL;
+  if (configured) {
+    try {
+      return new URL(configured).hostname;
+    } catch {
+      // fall through to the default below
+    }
+  }
+  return "localhost";
+}
+
+/** Reads the Supabase configuration. Safe now that loadEnvConfig has run. */
 function readSupabaseConfig() {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
@@ -58,12 +85,11 @@ async function resolveOrgId(config, accessToken) {
 }
 
 async function start() {
-  const app = next({ dev, hostname, port });
+  const app = next({ dev, hostname: publicHostname(), port });
   const handle = app.getRequestHandler();
 
   await app.prepare();
 
-  // Only now is .env.local in process.env.
   const config = readSupabaseConfig();
 
   const server = createServer((req, res) => {
@@ -114,8 +140,8 @@ async function start() {
     });
   });
 
-  server.listen(port, hostname, () => {
-    console.log(`Unibox ready on http://${hostname}:${port}`);
+  server.listen(port, bindHost, () => {
+    console.log(`Unibox listening on ${bindHost}:${port} — public URL ${appBaseUrl()}`);
     if (config.authEnabled) {
       console.log("[unibox] Supabase configured — sessions and socket auth are active.");
     } else {

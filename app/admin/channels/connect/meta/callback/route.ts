@@ -1,4 +1,5 @@
 import { cookies } from "next/headers";
+import { appUrl } from "@/lib/app-url";
 import {
   META_STATE_COOKIE,
   META_TOKEN_COOKIE,
@@ -18,7 +19,7 @@ export async function GET(request: Request) {
   const cookieStore = await cookies();
 
   const fail = (reason: string) =>
-    Response.redirect(new URL(`/admin/channels?error=${encodeURIComponent(reason)}`, url.origin));
+    Response.redirect(appUrl(`/admin/channels?error=${encodeURIComponent(reason)}`));
 
   const error = url.searchParams.get("error_description") ?? url.searchParams.get("error");
   if (error) {
@@ -57,5 +58,5 @@ export async function GET(request: Request) {
     maxAge: 900
   });
 
-  return Response.redirect(new URL("/admin/channels/connect/meta/select", url.origin));
+  return Response.redirect(appUrl("/admin/channels/connect/meta/select"));
 }

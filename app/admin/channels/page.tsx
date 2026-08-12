@@ -4,7 +4,7 @@ import { PlatformIcon, platformLabel } from "@/components/platform-badge";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { StatusDot } from "@/components/ui/status-dot";
-import { metaConfigured } from "@/lib/adapters/meta-connect";
+import { metaConfigured, metaRedirectUri } from "@/lib/adapters/meta-connect";
 import { requireRole } from "@/lib/auth";
 import { isEncryptionConfigured } from "@/lib/crypto";
 import { getSnapshot } from "@/lib/store";
@@ -34,7 +34,6 @@ export default async function ChannelsPage({
 
   const snapshot = await getSnapshot(db, member.orgId);
   const connected = new Set(snapshot.channels.map(channel => channel.platform));
-  const appUrl = process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000";
 
   return (
     <AppShell
@@ -79,7 +78,7 @@ export default async function ChannelsPage({
             <ConnectMetaButton configured={metaConfigured()} />
             <p className="mt-3 text-[11px] leading-relaxed text-muted-foreground">
               Add this as a Valid OAuth Redirect URI in the Meta app dashboard:{" "}
-              <code className="break-all">{appUrl}/admin/channels/connect/meta/callback</code>
+              <code className="break-all">{metaRedirectUri()}</code>
             </p>
           </CardContent>
         </Card>

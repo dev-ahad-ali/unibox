@@ -1,4 +1,5 @@
 import { graphRequest, graphUrl, graphVersion } from "@/lib/adapters/graph";
+import { appUrl } from "@/lib/app-url";
 import type { Platform } from "@/lib/types";
 
 /**
@@ -43,9 +44,10 @@ export function metaConfigured() {
   return Boolean(process.env.META_APP_ID && process.env.META_APP_SECRET);
 }
 
+export const META_CALLBACK_PATH = "/admin/channels/connect/meta/callback";
+
 export function metaRedirectUri() {
-  const appUrl = process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000";
-  return `${appUrl.replace(/\/$/, "")}/admin/channels/connect/meta/callback`;
+  return appUrl(META_CALLBACK_PATH);
 }
 
 export function metaAuthorizeUrl(state: string) {
