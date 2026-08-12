@@ -2,12 +2,12 @@
 
 Unified social inbox starter built from `docs/base.md`.
 
-This workspace now contains a runnable Next.js App Router scaffold with:
+This workspace contains a runnable Next.js App Router scaffold with:
 
-- a branded landing page,
-- an inbox view with a live send-message path,
+- an overview page and an agent inbox (shadcn/ui, Tailwind v4, black + lime theme),
 - admin pages for channels, agents, and analytics,
 - webhook endpoints for Messenger, Instagram, WhatsApp, and LINE,
+- working send paths for all four platforms,
 - a Supabase-backed repository layer with a demo fallback when env vars are missing,
 - Supabase schema and RLS SQL for the real deployment path,
 - Socket.io wiring for org/conversation live updates.
@@ -16,7 +16,7 @@ This workspace now contains a runnable Next.js App Router scaffold with:
 
 With valid Supabase env vars, the app reads and writes your Postgres database through the server-side repository in `lib/store.ts`.
 
-If the env vars are missing, the app falls back to seeded demo data so the UI still renders.
+If `NEXT_PUBLIC_SUPABASE_URL` or `SUPABASE_SERVICE_ROLE_KEY` is missing, the app runs on seeded demo data so the UI still renders. When Supabase *is* configured but a query fails, the app returns empty results and logs the error rather than substituting demo rows — a silent fallback makes a broken query look like an empty inbox.
 
 ## Project layout
 
@@ -69,8 +69,10 @@ The app can run in demo mode with no keys set. To connect real services, add the
 | `WHATSAPP_VERIFY_TOKEN` | required for WhatsApp webhooks | Secret value you choose and enter in Meta's webhook configuration. |
 | `META_GRAPH_API_VERSION` | recommended | Meta Graph API version used for WhatsApp sends; update it before Meta retires the selected version. |
 | `LINE_CHANNEL_ACCESS_TOKEN` | required for LINE sending | LINE Messaging API access token. |
-| `LINE_CHANNEL_SECRET` | required for LINE webhook verification | Used to validate `X-Line-Signature`. |
-| `LINE_VERIFY_TOKEN` | optional | Reserved for future setup flows if you want an extra shared challenge token. |
+| `INSTAGRAM_PAGE_ACCESS_TOKEN` | optional | Separate Instagram send token. Falls back to `META_PAGE_ACCESS_TOKEN`. |
+| `LINE_CHANNEL_SECRET` | required for LINE webhooks | Used to validate `X-Line-Signature`. Without it, LINE webhooks are rejected. |
+
+`APP_ENCRYPTION_KEY` must decode to 32 bytes — generate one with `openssl rand -hex 32`. Access tokens for a channel are read from `channels.access_token_encrypted` (decrypted with that key) and fall back to the platform env var when the column holds no usable value.
 
 ## Database setup
 
@@ -79,6 +81,8 @@ Run the SQL in this order:
 1. `supabase/schema.sql`
 2. `supabase/rls.sql`
 3. `supabase/seed.sql` for the starter org/channel rows
+
+`schema.sql` is idempotent, so re-run it after pulling changes. It adds `conversations.last_inbound_at` (the WhatsApp 24-hour window anchor) and two unique indexes: one on `(platform, external_account_id)` for webhook routing, and one on `messages.platform_message_id` so redelivered webhooks cannot duplicate a message.
 
 The schema follows the spec from `docs/base.md`:
 
@@ -106,11 +110,18 @@ The scaffold includes these routes:
 
 Each webhook path currently does the following:
 
-1. Verifies the request with the adapter for that platform.
-2. Normalizes the payload into internal message objects.
-3. Upserts a conversation by channel + external contact ID.
-4. Inserts an inbound message.
-5. Emits Socket.io events to the org and conversation rooms.
+1. Verifies the signature with the adapter for that platform, against the raw request body.
+2. Normalizes the payload into internal messages and delivery receipts.
+3. Resolves the `channels` row by the platform's own account id (Page id, WhatsApp `phone_number_id`, LINE `destination`), falling back to the first channel on that platform.
+4. Skips any message whose `platform_message_id` is already stored, since platforms redeliver until they get a 200.
+5. Upserts a conversation and inserts the inbound message.
+6. Applies delivery/read receipts to previously sent messages.
+7. Emits Socket.io events to the org and conversation rooms.
+8. Returns 200 immediately; contact profile lookups run detached.
+
+Signature verification is mandatory. If `META_APP_SECRET` (Meta) or `LINE_CHANNEL_SECRET` (LINE) is unset, the corresponding webhook rejects every request rather than accepting unsigned payloads.
+
+Messenger and Instagram echo events (`message.is_echo`) are dropped — they are the app's own outbound replies coming back, and ingesting them would duplicate every agent reply as a customer message.
 
 ### WhatsApp Cloud API development setup
 
@@ -147,13 +158,17 @@ This scaffold does not yet implement the full auth flow. It is structured so aut
 
 ## Current limitations
 
-- Messenger, Instagram, and LINE send adapters remain stubs. WhatsApp sends through Meta Cloud API.
-- Assignment, internal notes, and channel setup are represented in UI/data shape, but the full CRUD flow is not wired.
+- **No auth.** `/inbox`, `/admin/*`, and `/api/send-message` are unauthenticated. Anyone who can reach the app can read conversations and send messages as your brand. The RLS policies in `supabase/rls.sql` are written but not exercised, because every query uses the service role key, which bypasses RLS. Do not deploy this publicly until auth lands.
+- Channel connection is manual: insert a `channels` row yourself. There is no OAuth connect flow.
+- Assignment, internal notes, and channel setup render read-only; the CRUD actions are not wired.
+- WhatsApp sends text only. Template messages (needed outside the 24-hour window) and media sends are not implemented.
+- LINE webhook verification uses a single `LINE_CHANNEL_SECRET`, so one LINE channel per deployment. Meta platforms sign with one app secret and support multiple accounts already.
+- `/api/media/whatsapp/[mediaId]` proxies WhatsApp media and is unauthenticated, like the rest of the app.
 
 ## Next implementation steps
 
-1. Add Supabase Auth pages and org invite flow.
-2. Implement real Meta OAuth + webhook signing for Messenger/Instagram.
+1. Add Supabase Auth pages, session middleware, and the org invite flow, then switch reads to the signed-in user's token so the existing RLS policies take effect.
+2. Add the Meta OAuth connect flow so admins can attach a Page/IG account without hand-writing rows.
 3. Implement template and media sends for WhatsApp Cloud API.
 4. Wire admin CRUD for channels and agents.
 5. Add note creation and assignment actions in the inbox.

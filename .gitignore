@@ -5,4 +5,8 @@ coverage
 *.tsbuildinfo
 .env
 .env.local
+# Catches .env.production, .env.local.bak.*, and anything else holding real
+# credentials. .env.example is re-included below because it holds none.
+.env.*
+!.env.example
 .DS_Store
