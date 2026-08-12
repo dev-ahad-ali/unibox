@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { decryptSecret } from "@/lib/crypto";
+import { decryptSecret, encryptSecret } from "@/lib/crypto";
 import { demoChannels, demoConversations, demoMessages, demoNotes, demoOrg, demoUsers } from "@/lib/mock-data";
 import type { Db } from "@/lib/supabase";
 import type {
@@ -541,6 +541,158 @@ export async function findChannelForEvent(
     .maybeSingle<ChannelRow>();
 
   return data ? toChannel(data) : undefined;
+}
+
+export type ChannelInput = {
+  orgId: string;
+  platform: Platform;
+  displayName: string;
+  externalAccountId: string;
+  /** Plaintext — encrypted here before it touches Postgres. */
+  accessToken?: string;
+  connectedBy?: string | null;
+  status?: Channel["status"];
+};
+
+/**
+ * Creates or refreshes a channel. Reconnecting the same platform account
+ * updates the existing row rather than failing on the unique index, so an
+ * expired token can be replaced without deleting the conversations attached
+ * to it.
+ *
+ * Must be called with the service client: `access_token_encrypted` is revoked
+ * from the `authenticated` role, so a user-scoped write of that column would be
+ * rejected by Postgres.
+ */
+export async function upsertChannel(db: Db, input: ChannelInput): Promise<Channel> {
+  if (!db) {
+    const state = getDemoState();
+    const existing = state.channels.find(
+      channel =>
+        channel.platform === input.platform &&
+        channel.externalAccountId === input.externalAccountId
+    );
+
+    if (existing) {
+      existing.displayName = input.displayName;
+      existing.status = input.status ?? "active";
+      return existing;
+    }
+
+    const channel: Channel = {
+      id: randomUUID(),
+      orgId: input.orgId,
+      platform: input.platform,
+      displayName: input.displayName,
+      externalAccountId: input.externalAccountId,
+      status: input.status ?? "active",
+      connectedBy: input.connectedBy ?? null,
+      createdAt: new Date().toISOString()
+    };
+
+    state.channels.push(channel);
+    return channel;
+  }
+
+  const row: Record<string, unknown> = {
+    org_id: input.orgId,
+    platform: input.platform,
+    display_name: input.displayName,
+    external_account_id: input.externalAccountId,
+    status: input.status ?? "active",
+    connected_by: input.connectedBy ?? null
+  };
+
+  // Only overwrite the stored token when a new one was supplied, so renaming a
+  // channel does not wipe its credentials.
+  if (input.accessToken) {
+    row.access_token_encrypted = encryptSecret(input.accessToken);
+  }
+
+  const existing = await db
+    .from("channels")
+    .select("id, org_id")
+    .eq("platform", input.platform)
+    .eq("external_account_id", input.externalAccountId)
+    .maybeSingle<{ id: string; org_id: string }>();
+
+  if (existing.data) {
+    if (existing.data.org_id !== input.orgId) {
+      throw new Error("That account is already connected to a different workspace.");
+    }
+
+    const { data, error } = await db
+      .from("channels")
+      .update(row)
+      .eq("id", existing.data.id)
+      .select(CHANNEL_COLUMNS)
+      .single<ChannelRow>();
+
+    if (error || !data) {
+      throw error ?? new Error("Unable to update the channel");
+    }
+
+    return toChannel(data);
+  }
+
+  if (!input.accessToken) {
+    throw new Error("An access token is required when connecting a new channel.");
+  }
+
+  const { data, error } = await db
+    .from("channels")
+    .insert(row)
+    .select(CHANNEL_COLUMNS)
+    .single<ChannelRow>();
+
+  if (error || !data) {
+    throw error ?? new Error("Unable to create the channel");
+  }
+
+  return toChannel(data);
+}
+
+/** Non-credential edits. Safe on the user client, where RLS re-checks the role. */
+export async function updateChannelSettings(
+  db: Db,
+  channelId: string,
+  orgId: string,
+  patch: { displayName?: string; status?: Channel["status"] }
+): Promise<Channel | undefined> {
+  if (!db) {
+    const channel = getDemoState().channels.find(entry => entry.id === channelId);
+    if (channel) {
+      if (patch.displayName) channel.displayName = patch.displayName;
+      if (patch.status) channel.status = patch.status;
+    }
+    return channel;
+  }
+
+  const { data } = await db
+    .from("channels")
+    .update({
+      ...(patch.displayName ? { display_name: patch.displayName } : {}),
+      ...(patch.status ? { status: patch.status } : {})
+    })
+    .eq("id", channelId)
+    .eq("org_id", orgId)
+    .select(CHANNEL_COLUMNS)
+    .maybeSingle<ChannelRow>();
+
+  return data ? toChannel(data) : undefined;
+}
+
+export async function deleteChannel(db: Db, channelId: string, orgId: string) {
+  if (!db) {
+    const state = getDemoState();
+    state.channels = state.channels.filter(channel => channel.id !== channelId);
+    return;
+  }
+
+  const { error } = await db.from("channels").delete().eq("id", channelId).eq("org_id", orgId);
+  if (error) {
+    throw error;
+  }
 }
 
 /**
