@@ -8,11 +8,10 @@ export const metadata: Metadata = {
 };
 
 export default function RootLayout({ children }: Readonly<{ children: ReactNode }>) {
+  // The inbox is a long-session tool, so it ships dark by default.
   return (
-    <html lang="en">
-      <body>
-        <div className="page-shell">{children}</div>
-      </body>
+    <html lang="en" className="dark" suppressHydrationWarning>
+      <body className="antialiased">{children}</body>
     </html>
   );
 }

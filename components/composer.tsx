@@ -1,54 +1,90 @@
 "use client";
 
 import { useState } from "react";
+import { useRouter } from "next/navigation";
+import { Send } from "lucide-react";
 
-export function Composer({ conversationId }: Readonly<{ conversationId: string }>) {
+import { Button } from "@/components/ui/button";
+import { Textarea } from "@/components/ui/textarea";
+
+export function Composer({
+  conversationId,
+  disabled = false
+}: Readonly<{ conversationId: string; disabled?: boolean }>) {
+  const router = useRouter();
   const [body, setBody] = useState("");
-  const [feedback, setFeedback] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
   const [isPending, setIsPending] = useState(false);
+
+  async function send() {
+    if (!body.trim() || isPending || disabled) {
+      return;
+    }
+
+    setIsPending(true);
+    setError(null);
+
+    try {
+      const response = await fetch("/api/send-message", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ conversationId, body })
+      });
+      const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+
+      if (!response.ok) {
+        setError(payload?.error ?? "Unable to send message.");
+        return;
+      }
+
+      setBody("");
+      // The thread is server-rendered, so pull the new message back down.
+      router.refresh();
+    } catch {
+      setError("Network error — the message was not sent.");
+    } finally {
+      setIsPending(false);
+    }
+  }
 
   return (
     <form
       onSubmit={event => {
         event.preventDefault();
-        void (async () => {
-          setIsPending(true);
-          setFeedback(null);
-          try {
-            const response = await fetch("/api/send-message", {
-              method: "POST",
-              headers: {
-                "Content-Type": "application/json"
-              },
-              body: JSON.stringify({ conversationId, body })
-            });
-            const payload = (await response.json().catch(() => null)) as { error?: string } | null;
-            if (!response.ok) {
-              setFeedback(payload?.error ?? "Unable to send message.");
-              return;
-            }
-            setBody("");
-            setFeedback("Message sent and synced to the live store.");
-          } finally {
-            setIsPending(false);
-          }
-        })();
+        void send();
       }}
+      className="flex flex-col gap-2"
     >
-      <textarea
-        className="textarea"
+      <Textarea
         name="body"
-        placeholder="Reply to the customer..."
+        rows={2}
+        disabled={disabled}
+        placeholder={disabled ? "Replies are blocked outside the service window" : "Write a reply…"}
         value={body}
         onChange={event => setBody(event.target.value)}
+        onKeyDown={event => {
+          // Enter sends, Shift+Enter breaks the line — the convention every
+          // agent already has muscle memory for.
+          if (event.key === "Enter" && !event.shiftKey) {
+            event.preventDefault();
+            void send();
+          }
+        }}
       />
-      <div className="composer-actions">
-        <button className="button primary" type="submit" disabled={isPending || !body.trim()}>
-          {isPending ? "Sending..." : "Send reply"}
-        </button>
-        <span className="form-note">Outbound messages are routed through the adapter chosen by the conversation channel.</span>
+
+      <div className="flex items-center justify-between gap-3">
+        <span className="text-[11px] text-muted-foreground">
+          {error ? (
+            <span className="text-destructive">{error}</span>
+          ) : (
+            "Enter to send · Shift+Enter for a new line"
+          )}
+        </span>
+        <Button type="submit" size="sm" disabled={disabled || isPending || !body.trim()}>
+          <Send aria-hidden />
+          {isPending ? "Sending…" : "Send"}
+        </Button>
       </div>
-      {feedback ? <div className="form-note">{feedback}</div> : null}
     </form>
   );
 }

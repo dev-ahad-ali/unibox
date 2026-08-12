@@ -1,82 +1,83 @@
 import Link from "next/link";
+import { ArrowRight } from "lucide-react";
+
 import { AppShell } from "@/components/shell";
-import { summarizeInbox } from "@/lib/store";
+import { PlatformIcon, platformLabel } from "@/components/platform-badge";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { StatusDot } from "@/components/ui/status-dot";
+import { getDemoSnapshot, summarizeInbox } from "@/lib/store";
+import { isDemoMode } from "@/lib/env";
 
 export default async function HomePage() {
-  const stats = await summarizeInbox();
+  const [stats, snapshot] = await Promise.all([summarizeInbox(), getDemoSnapshot()]);
+
+  const metrics = [
+    { label: "Open conversations", value: stats.openCount },
+    { label: "Pending", value: stats.pendingCount },
+    { label: "Connected channels", value: stats.activeChannels },
+    { label: "Inbound messages", value: stats.unreadCount }
+  ];
 
   return (
     <AppShell
-      title="Unibox"
-      subtitle="A phase-1 starter for a multi-channel support inbox with Supabase-backed storage, live event delivery, and platform adapters for Messenger, Instagram, WhatsApp, and LINE."
+      title="Overview"
+      subtitle={isDemoMode() ? "Running on seeded demo data" : "Connected to Supabase"}
+      active="/"
+      actions={
+        <Button asChild size="sm">
+          <Link href="/inbox">
+            Open inbox
+            <ArrowRight aria-hidden />
+          </Link>
+        </Button>
+      }
     >
-      <section className="grid landing-grid">
-        <div className="hero">
-          <div className="hero-grid">
-            <div className="metric">
-              <span className="value">{stats.openCount}</span>
-              <span className="label">Open conversations</span>
-            </div>
-            <div className="metric">
-              <span className="value">{stats.activeChannels}</span>
-              <span className="label">Connected channels</span>
-            </div>
-            <div className="metric">
-              <span className="value">{stats.unreadCount}</span>
-              <span className="label">Inbound messages</span>
-            </div>
-          </div>
-
-          <div>
-            <h2>What is in this scaffold</h2>
-            <p className="muted">
-              The repo now includes a functioning inbox UI, admin screens, webhook endpoints, a send-message API, a Supabase-backed
-              repository layer with demo fallback, and the schema/RLS SQL needed to connect the database.
-            </p>
-          </div>
-
-          <div className="hero-actions">
-            <Link className="button primary" href="/inbox">
-              Open inbox
-            </Link>
-            <Link className="button" href="/admin/channels">
-              Review channel setup
-            </Link>
-          </div>
+      <div className="flex flex-col gap-6">
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          {metrics.map(metric => (
+            <Card key={metric.label}>
+              <CardContent className="p-4">
+                <div className="text-2xl font-semibold tabular-nums">{metric.value}</div>
+                <div className="mt-1 text-xs text-muted-foreground">{metric.label}</div>
+              </CardContent>
+            </Card>
+          ))}
         </div>
 
-        <div className="side-stack">
-          <section className="panel">
-            <h3>Build slice</h3>
-            <ul className="mini-list">
-              <li>
-                <span>Data model</span>
-                <span className="muted">organizations, channels, conversations, messages, notes</span>
-              </li>
-              <li>
-                <span>Realtime</span>
-                <span className="muted">Socket.io rooms for org and conversation streams</span>
-              </li>
-              <li>
-                <span>Adapters</span>
-                <span className="muted">Meta, WhatsApp BSP, and LINE adapters with platform-specific hooks</span>
-              </li>
-            </ul>
-          </section>
-
-          <section className="panel">
-            <h3>Runtime mode</h3>
-            <p className="muted">
-              If Supabase keys are missing, the app falls back to seeded demo data. With valid keys, it reads from Postgres.
-            </p>
-            <div className="filters">
-              <span className="chip">Demo-ready</span>
-              <span className="chip">Phase 1 scaffold</span>
-              <span className="chip">Next.js App Router</span>
-            </div>
-          </section>
-        </div>
-      </section>
+        <Card>
+          <CardHeader>
+            <CardTitle>Channels</CardTitle>
+          </CardHeader>
+          <CardContent className="flex flex-col gap-0">
+            {snapshot.channels.length === 0 ? (
+              <p className="text-xs text-muted-foreground">
+                No channels connected yet. Add a row to the <code>channels</code> table to get
+                started.
+              </p>
+            ) : (
+              snapshot.channels.map(channel => (
+                <div
+                  key={channel.id}
+                  className="flex items-center gap-3 border-b border-border/60 py-2.5 last:border-0"
+                >
+                  <PlatformIcon platform={channel.platform} />
+                  <span className="min-w-0 flex-1 truncate text-sm">{channel.displayName}</span>
+                  <span className="hidden text-xs text-muted-foreground sm:inline">
+                    {platformLabel(channel.platform)}
+                  </span>
+                  <span className="inline-flex items-center gap-1.5 text-xs text-muted-foreground">
+                    <StatusDot status={channel.status} />
+                    {channel.status}
+                  </span>
+                </div>
+              ))
+            )}
+          </CardContent>
+        </Card>
+      </div>
     </AppShell>
   );
 }
+
+export const dynamic = "force-dynamic";
