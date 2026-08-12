@@ -146,4 +146,9 @@ export interface ChannelAdapter {
     channel: AuthorizedChannel,
     externalContactId: string
   ): Promise<{ name: string; avatarUrl?: string }>;
+  /**
+   * Calls the platform with the stored credentials to confirm they still work.
+   * Drives the active/error status shown on the channels screen.
+   */
+  verifyCredentials(channel: AuthorizedChannel): Promise<{ label: string }>;
 }

@@ -115,6 +115,16 @@ export const lineAdapter: ChannelAdapter = {
       platformMessageId: data.sentMessages?.[0]?.id ?? `line_${randomUUID()}`
     };
   },
+  async verifyCredentials(channel: AuthorizedChannel) {
+    const data = await lineRequest<{ displayName?: string; basicId?: string; userId?: string }>(
+      "info",
+      { method: "GET", accessToken: accessToken(channel) }
+    );
+
+    return {
+      label: [data.displayName, data.basicId].filter(Boolean).join(" ") || channel.externalAccountId
+    };
+  },
   async fetchContactProfile(channel: AuthorizedChannel, externalContactId: string) {
     const data = await lineRequest<{ displayName?: string; pictureUrl?: string }>(
       `profile/${encodeURIComponent(externalContactId)}`,

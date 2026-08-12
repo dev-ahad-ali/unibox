@@ -188,6 +188,17 @@ export const whatsappAdapter: ChannelAdapter = {
     }
 
     return { platformMessageId };
+  },
+  async verifyCredentials(channel: AuthorizedChannel) {
+    const data = await graphRequest<{ display_phone_number?: string; verified_name?: string }>(
+      `${phoneNumberId(channel)}?fields=display_phone_number,verified_name`,
+      { method: "GET", accessToken: accessToken(channel) }
+    );
+
+    return {
+      label: [data.verified_name, data.display_phone_number].filter(Boolean).join(" · ") ||
+        channel.externalAccountId
+    };
   }
 };
 

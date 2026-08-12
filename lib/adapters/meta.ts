@@ -148,6 +148,16 @@ export function createMetaAdapter(platform: "messenger" | "instagram"): ChannelA
 
       return { platformMessageId: data.message_id };
     },
+    async verifyCredentials(channel: AuthorizedChannel) {
+      const token = accessToken(channel, platform);
+      const fields = platform === "instagram" ? "id,username,name" : "id,name";
+      const data = await graphRequest<{ id?: string; name?: string; username?: string }>(
+        `${channel.externalAccountId}?fields=${fields}`,
+        { method: "GET", accessToken: token }
+      );
+
+      return { label: data.name || data.username || data.id || channel.externalAccountId };
+    },
     async fetchContactProfile(channel: AuthorizedChannel, externalContactId: string) {
       const token = accessToken(channel, platform);
       const fields = platform === "instagram" ? "name,username,profile_pic" : "name,profile_pic";
