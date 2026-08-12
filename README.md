@@ -1,232 +1,460 @@
 # Unibox
 
-Unified social inbox starter built from `docs/base.md`.
+A unified social inbox. Customer messages from **Facebook Messenger, Instagram DM, WhatsApp, and LINE** land in one shared queue, and your team answers them all from one screen without switching apps or logging into four dashboards.
 
-This workspace contains a runnable Next.js App Router scaffold with:
+Built from the specification in [`docs/base.md`](docs/base.md).
 
-- an overview page and an agent inbox (shadcn/ui, Tailwind v4, black + lime theme),
-- admin pages for channels, agents, and analytics,
-- webhook endpoints for Messenger, Instagram, WhatsApp, and LINE,
-- working send paths for all four platforms,
-- a Supabase-backed repository layer with a demo fallback when env vars are missing,
-- Supabase schema and RLS SQL for the real deployment path,
-- Socket.io wiring for org/conversation live updates.
+---
 
-## What runs right now
+## Contents
 
-With valid Supabase env vars, the app reads and writes your Postgres database through the server-side repository in `lib/store.ts`.
+- [What it does](#what-it-does)
+- [Using Unibox](#using-unibox) — the day-to-day guide
+- [Stack and architecture](#stack-and-architecture)
+- [Setup](#setup)
+- [Environment variables](#environment-variables)
+- [Database setup](#database-setup)
+- [Connecting channels](#connecting-channels)
+- [Receiving messages: webhooks](#receiving-messages-webhooks)
+- [Sending messages](#sending-messages)
+- [Security model](#security-model)
+- [Troubleshooting](#troubleshooting)
+- [Limitations](#limitations)
+- [Roadmap](#roadmap)
 
-If `NEXT_PUBLIC_SUPABASE_URL` or `SUPABASE_SERVICE_ROLE_KEY` is missing, the app runs on seeded demo data so the UI still renders. When Supabase *is* configured but a query fails, the app returns empty results and logs the error rather than substituting demo rows — a silent fallback makes a broken query look like an empty inbox.
+---
 
-## Project layout
+## What it does
 
-- `app/` - Next.js routes, UI pages, and API endpoints.
-- `components/` - shared UI pieces.
-- `lib/` - domain types, mock store, adapters, socket helpers, and Supabase client helpers.
-- `supabase/` - schema and RLS SQL.
-- `docs/base.md` - original build specification that this scaffold follows.
+- **One inbox, four platforms.** Messenger, Instagram, WhatsApp, and LINE conversations in a single list, filterable by channel and status.
+- **Real two-way messaging.** Inbound webhooks write to Postgres; replies go back out through each platform's own API.
+- **Live updates.** Socket.io pushes new messages to open browsers without a refresh.
+- **Multi-tenant from day one.** Every row is scoped to an organization, enforced by Postgres row-level security.
+- **Roles.** Admins manage the workspace, agents answer messages, viewers read and report.
+- **Credentials encrypted at rest.** Platform tokens are AES-256-GCM encrypted and unreadable to anyone but the server.
 
-## How to run locally
+---
 
-1. Install dependencies.
+## Using Unibox
 
-```bash
-npm install
+This section is the user guide. It assumes the app is already deployed and the database is set up — if not, start at [Setup](#setup).
+
+### Getting in
+
+**If you are starting a new workspace**, go to `/signup`. Enter a workspace name, your name, email, and a password. You become the workspace's first **admin**. If your Supabase project has email confirmation enabled, check your inbox for the link before signing in.
+
+**If someone invited you**, they will send you a link that looks like `https://your-app/join/AbC123…`. Open it, pick a password, and you are in with whatever role they assigned. The link works once and expires after 7 days.
+
+Afterwards, sign in at `/login`. Sessions persist; sign out from the button next to your name at the bottom of the sidebar.
+
+### What each role can do
+
+| | Admin | Agent | Viewer |
+| --- | :---: | :---: | :---: |
+| See the inbox | all conversations | assigned + unassigned-and-open | all conversations |
+| Send replies | ✅ | ✅ | ❌ |
+| Connect / manage channels | ✅ | ❌ | ❌ |
+| Invite people, change roles | ✅ | ❌ | ❌ |
+| View analytics | ✅ | ❌ | ✅ |
+
+Navigation is filtered by role, so agents never see admin destinations at all.
+
+### For admins: first-run checklist
+
+1. **Sign up** at `/signup` — this creates the workspace.
+2. **Connect a channel** at `/admin/channels`. See [Connecting channels](#connecting-channels). Nothing arrives in the inbox until at least one channel exists.
+3. **Point the platform's webhook** at your app. See [Receiving messages](#receiving-messages-webhooks). This is the step people forget — a connected channel with no webhook stays silent forever.
+4. **Send yourself a test message** from a real account on that platform. It should appear in `/inbox` within a second or two.
+5. **Invite your team** at `/admin/agents`.
+
+### For admins: inviting your team
+
+Go to `/admin/agents`, enter an email, pick a role, and press **Create invite**. You get a `/join/<token>` link.
+
+> **Unibox does not send the email.** Copy the link and send it however you normally would. Wiring an email provider is the one remaining step here.
+
+The same page lists current members — change someone's role from the dropdown — and pending invites, which you can revoke. You cannot remove your own admin role, so a workspace can never lock itself out.
+
+### For agents: working the inbox
+
+`/inbox` is a three-pane screen.
+
+**Left — the queue.** Every conversation, newest activity first. Each row shows the contact, the platform icon, and a status dot. Two filter rows sit above it: status (All / Open / Pending / Closed) and channel (All / Messenger / Instagram / WhatsApp / LINE). Filters combine, and they live in the URL — so a filtered view is a bookmarkable, shareable link.
+
+**Centre — the thread.** Full history with the customer, oldest at top. Your team's replies are the lime bubbles on the right; the customer's are bordered on the left. Each message shows its timestamp and delivery state (`sent` → `delivered` → `read`, or `failed`).
+
+**Right — context.** Contact name and platform id, which channel it came in on, who it is assigned to, when the customer last wrote, and any internal notes. Notes are staff-only and are never sent to the customer.
+
+**Replying.** Type in the box at the bottom. **Enter sends, Shift+Enter adds a line.** If the platform rejects the message, the error is shown and *no message bubble is added* — you will never see a reply that looks delivered but never arrived.
+
+**The status dot** means: lime = open, amber = pending, grey = closed.
+
+### The WhatsApp 24-hour window
+
+WhatsApp only allows free-form replies for **24 hours after the customer's last message**. Outside that window Meta rejects anything but a pre-approved template.
+
+Unibox shows this above the reply box on WhatsApp conversations:
+
+- *Inside the window* — a quiet note with roughly how many hours remain.
+- *Outside it* — an amber warning, and the composer is disabled.
+
+The check also runs server-side, so the window cannot be bypassed by any client. The countdown restarts every time the customer writes again.
+
+### Live updates
+
+The pill in the top-right shows the realtime connection: **live**, **connecting**, or **offline**. While it says *live*, new messages appear on their own. If it says *offline*, you are still working normally — you just need to refresh to see new arrivals.
+
+---
+
+## Stack and architecture
+
+| Layer | Choice |
+| --- | --- |
+| Framework | Next.js 15 (App Router, React 19, server components) |
+| Database | Supabase Postgres, with row-level security |
+| Auth | Supabase Auth (email + password), cookie sessions via `@supabase/ssr` |
+| Realtime | Socket.io on a custom Node server (`server.js`) |
+| UI | Tailwind CSS v4 + shadcn/ui, black and lime theme, dark by default |
+| Language | TypeScript, strict |
+
+### Layout
+
+```
+app/
+  (auth)/          login, signup, join/[token] — the only public pages
+  admin/           channels, agents, analytics (admin/viewer only)
+  inbox/           the agent inbox
+  api/
+    webhooks/      one route per platform — signature-authenticated
+    send-message/  outbound replies
+    media/         authenticated WhatsApp media proxy
+    health/        liveness + config probe
+components/
+  ui/              shadcn primitives
+lib/
+  adapters/        per-platform integrations (see below)
+  auth.ts          session + role guards
+  store.ts         every database query
+  crypto.ts        AES-256-GCM for stored credentials
+  webhooks.ts      shared inbound pipeline
+middleware.ts      session refresh + route gating
+supabase/          schema.sql, rls.sql, seed.sql
 ```
 
-2. Create your environment file from the sample.
+### The adapter pattern
 
-```bash
-cp .env.example .env.local
+Every platform implements one interface (`ChannelAdapter` in `lib/types.ts`), so adding a fifth platform never touches the inbox, the store, or the UI:
+
+```ts
+verifyWebhook(context)                              // is this really from the platform?
+parseIncoming(payload)  -> { messages, statuses }   // normalize to our shape
+sendMessage(channel, contactId, message)            // reply
+fetchContactProfile?(channel, contactId)            // optional enrichment
+verifyCredentials(channel)                          // is the stored token still good?
 ```
 
-3. Start the app.
+- `lib/adapters/graph.ts` — shared Meta Graph client. Messenger, Instagram, and WhatsApp all run on it and are signed by the same app secret, so transport, signature checking, and error shape live there once.
+- `lib/adapters/meta.ts` — Messenger and Instagram.
+- `lib/adapters/whatsapp.ts` — WhatsApp Cloud API.
+- `lib/adapters/line.ts` — LINE Messaging API.
+- `lib/adapters/meta-connect.ts` — the OAuth handshake, kept separate from message handling.
+
+### Data model
+
+`organizations` → `org_users` (membership + role) → `channels` (connected accounts) → `conversations` (one per customer per channel) → `messages`, plus `internal_notes` and `org_invites`.
+
+Every query goes through `lib/store.ts`, which takes its Supabase client as an explicit argument — user-scoped for anything a person triggers, service-role only where documented.
+
+### Demo mode
+
+With no Supabase env vars, the app runs on seeded in-memory data as a stand-in admin and gates nothing. The sidebar shows a warning while this is active. It exists so the UI is explorable without any backend, and it is unreachable once Supabase is configured.
+
+> Deploying with missing Supabase env vars silently produces an open app. Set them, or do not deploy.
+
+---
+
+## Setup
+
+**Requirements:** Node 20+ (developed on 24), pnpm, and a Supabase project.
 
 ```bash
-npm run dev
+pnpm install
+cp .env.example .env.local     # then fill it in — see below
+pnpm dev                       # http://localhost:3000
 ```
 
-4. Open `http://localhost:3000`.
+| Script | Does |
+| --- | --- |
+| `pnpm dev` | Dev server with Socket.io attached |
+| `pnpm build` | Production build |
+| `pnpm start` | Production server |
+| `pnpm typecheck` | `tsc --noEmit` |
+
+`pnpm dev` runs `server.js`, not `next dev` — the custom server is what attaches Socket.io to the same port.
+
+On start it prints which mode it is in:
+
+```
+[unibox] Supabase configured — sessions and socket auth are active.
+[unibox] Supabase is not configured — running in demo mode with no auth.
+```
+
+---
 
 ## Environment variables
 
-The app can run in demo mode with no keys set. To connect real services, add these values to `.env.local`.
+Copy `.env.example` to `.env.local`. It is gitignored, along with `.env.*`.
+
+### Core
 
 | Variable | Required | Purpose |
 | --- | --- | --- |
-| `NEXT_PUBLIC_APP_URL` | yes | Base URL for browser socket connections and local callbacks. |
-| `NEXT_PUBLIC_SUPABASE_URL` | yes for Supabase mode | Supabase project URL used by the server-side client. |
-| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | optional for now | Browser-safe key reserved for future client auth and public reads. |
-| `SUPABASE_SERVICE_ROLE_KEY` | yes for server-side DB access | Server-only Supabase key for privileged reads/writes. Never expose it to the browser. |
-| `APP_ENCRYPTION_KEY` | yes for real channel credentials | Encryption key for `channels.access_token_encrypted` at rest. |
-| `SESSION_SECRET` | recommended | Session/JWT signing secret if you add custom auth/session logic. |
-| `META_APP_ID` | required for Messenger/Instagram | Meta app identifier. |
-| `META_APP_SECRET` | required for Messenger/Instagram webhooks | Used to verify `X-Hub-Signature-256`. |
-| `META_VERIFY_TOKEN` | required for Messenger/Instagram webhooks | Shared verify token for webhook challenge requests. |
-| `META_PAGE_ACCESS_TOKEN` | required for Messenger/Instagram sending | Page/IG send token, kept server-side only. |
-| `WHATSAPP_ACCESS_TOKEN` | required for WhatsApp sending | Meta Cloud API access token. Keep it server-side only. |
-| `WHATSAPP_PHONE_NUMBER_ID` | required for WhatsApp sending | Meta Cloud API phone-number ID, not the phone number itself. |
-| `WHATSAPP_VERIFY_TOKEN` | required for WhatsApp webhooks | Secret value you choose and enter in Meta's webhook configuration. |
-| `META_GRAPH_API_VERSION` | recommended | Meta Graph API version used for WhatsApp sends; update it before Meta retires the selected version. |
-| `LINE_CHANNEL_ACCESS_TOKEN` | required for LINE sending | LINE Messaging API access token. |
-| `INSTAGRAM_PAGE_ACCESS_TOKEN` | optional | Separate Instagram send token. Falls back to `META_PAGE_ACCESS_TOKEN`. |
-| `LINE_CHANNEL_SECRET` | required for LINE webhooks | Used to validate `X-Line-Signature`. Without it, LINE webhooks are rejected. |
+| `NEXT_PUBLIC_APP_URL` | yes | Public base URL. Must match what you register as webhook and OAuth callback URLs. |
+| `NEXT_PUBLIC_SUPABASE_URL` | yes | Supabase project URL. |
+| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | yes | Browser-safe key. Auth and all RLS-enforced reads use it. |
+| `SUPABASE_SERVICE_ROLE_KEY` | yes | Bypasses RLS. Server-only — never expose it. |
+| `APP_ENCRYPTION_KEY` | yes | Encrypts stored platform tokens. `openssl rand -hex 32`. |
+| `SESSION_SECRET` | no | Reserved. Not yet read by anything. |
 
-`APP_ENCRYPTION_KEY` must decode to 32 bytes — generate one with `openssl rand -hex 32`. Access tokens for a channel are read from `channels.access_token_encrypted` (decrypted with that key) and fall back to the platform env var when the column holds no usable value.
+> **Back up `APP_ENCRYPTION_KEY`.** Lose it and every stored channel token is unrecoverable — you would have to reconnect every channel.
+
+### Meta — Messenger, Instagram, WhatsApp
+
+One Meta app covers all three.
+
+| Variable | Required | Purpose |
+| --- | --- | --- |
+| `META_APP_ID` | for OAuth connect | Meta app id. |
+| `META_APP_SECRET` | yes, for any Meta channel | Signs every webhook. **Without it all Meta webhooks are rejected.** |
+| `META_VERIFY_TOKEN` | yes | Any string you choose; paste the same value into Meta's webhook dialog. |
+| `META_GRAPH_API_VERSION` | recommended | Defaults to `v26.0`, the newest version `graph.facebook.com` recognizes. |
+| `META_PAGE_ACCESS_TOKEN` | fallback | Used only when a channel row has no usable stored token. |
+| `INSTAGRAM_PAGE_ACCESS_TOKEN` | fallback | Falls back to `META_PAGE_ACCESS_TOKEN`. |
+| `WHATSAPP_ACCESS_TOKEN` | fallback | As above, for WhatsApp. |
+| `WHATSAPP_PHONE_NUMBER_ID` | fallback | The phone number **id**, not the number. |
+| `WHATSAPP_VERIFY_TOKEN` | no | Separate WhatsApp verify token; falls back to `META_VERIFY_TOKEN`. |
+
+### LINE
+
+| Variable | Required | Purpose |
+| --- | --- | --- |
+| `LINE_CHANNEL_ACCESS_TOKEN` | fallback | Messaging API token. |
+| `LINE_CHANNEL_SECRET` | yes, for LINE | Validates `X-Line-Signature`. **Without it all LINE webhooks are rejected.** |
+
+**On "fallback":** tokens normally live encrypted in `channels.access_token_encrypted` and are set by connecting a channel in the UI. The env vars are a single-account convenience for local development; a stored token always wins.
+
+---
 
 ## Database setup
 
-Run the SQL in this order:
+Run these in the Supabase SQL editor, in order:
 
-1. `supabase/schema.sql`
-2. `supabase/rls.sql`
-3. `supabase/seed.sql` for the starter org/channel rows
+1. **`supabase/schema.sql`** — tables and indexes.
+2. **`supabase/rls.sql`** — row-level security, helper functions, column grants.
+3. `supabase/seed.sql` — optional, only if you want to insert a channel by hand.
 
-Both `schema.sql` and `rls.sql` are idempotent — re-run them after pulling changes, in that order (`rls.sql` references the `org_invites` table that `schema.sql` creates).
+Both are idempotent, so re-run them after pulling changes. Order matters: `rls.sql` references the `org_invites` table that `schema.sql` creates.
 
-`rls.sql` fixes two problems in the original policies. The `current_org_id()` helpers now run as `SECURITY DEFINER`: they read `org_users`, and the policy on `org_users` calls them, so without it Postgres aborts with *infinite recursion detected in policy for relation org_users*. And the `FOR ALL` policies were split into separate insert/update/delete policies — because permissive policies are OR'd together, a `FOR ALL` policy also granted `SELECT`, which handed agents read access to every conversation in the org and made the visibility rule above it dead code.
+You do **not** need to seed an organization or an admin — `/signup` creates both.
 
-`schema.sql` is idempotent, so re-run it after pulling changes. It adds `conversations.last_inbound_at` (the WhatsApp 24-hour window anchor) and two unique indexes: one on `(platform, external_account_id)` for webhook routing, and one on `messages.platform_message_id` so redelivered webhooks cannot duplicate a message.
+### What the schema adds beyond the spec
 
-The schema follows the spec from `docs/base.md`:
+- `conversations.last_inbound_at` — anchors the WhatsApp 24-hour window.
+- `org_invites` — pending invitations with single-use tokens.
+- Unique index on `channels(platform, external_account_id)` — webhook routing depends on this pair being unique.
+- Unique index on `messages.platform_message_id` — platforms redeliver until they get a 200, and without this every retry would duplicate a message.
+- Unique index on `org_users(auth_user_id)` — one membership per person.
 
-- `organizations`
-- `org_users`
-- `channels`
-- `conversations`
-- `messages`
-- `internal_notes`
+### Two RLS bugs the spec's policies contained
 
-RLS is set up so org membership determines visibility, with extra conversation visibility rules for agents and viewers.
+Worth knowing if you are adapting `rls.sql`:
 
-Important: `channels.access_token_encrypted` is sensitive. Do not fetch that column in agent-facing queries. Even though RLS controls row visibility, the safest pattern is to only select that field in server-only code.
+1. **Infinite recursion.** `current_org_id()` reads `org_users`, and the policy on `org_users` calls it — so the lookup was subject to the policy that invoked it. Postgres aborts with *infinite recursion detected in policy for relation org_users*. The helpers now run as `SECURITY DEFINER` with a pinned `search_path`.
 
-The app currently loads the first organization it finds. If your database is empty, insert at least one organization, one `org_users` row, and one channel row before testing the inbox.
+2. **`FOR ALL` silently granted `SELECT`.** Permissive policies are OR'd together, so `"admins and agents can manage conversations" FOR ALL` gave every agent read access to *every* conversation in the org — making the carefully written visibility rule directly above it dead code. Reads and writes are now separate policies.
+
+---
 
 ## Connecting channels
 
-`/admin/channels` (admins only) has two paths.
+`/admin/channels`, admins only. Two paths.
 
-### Connect with Meta
+### Connect with Meta (recommended)
 
-One Facebook login covers Messenger, Instagram, and WhatsApp:
+One Facebook login covers Messenger, Instagram, and WhatsApp.
 
-1. `/admin/channels/connect/meta` sets a CSRF `state` cookie and redirects to the Facebook login dialog.
-2. The callback verifies `state` with a constant-time compare, exchanges the code for a user token, and **upgrades it to a long-lived token** — a short-lived one expires in about an hour and would take every stored Page token with it. The token is parked in an encrypted, httpOnly cookie (15 min TTL), so it never reaches the browser in readable form.
-3. The picker lists every Page, linked Instagram Business account, and WhatsApp phone number the login can manage. Assets are **re-fetched server-side on submit** rather than trusted from the form, so a client cannot post an account it was never authorized for.
-4. Each connected Page is subscribed to `messages`, `messaging_postbacks`, `message_deliveries`, and `message_reads`. Skipping this is the most common reason a "connected" Messenger channel never receives anything.
-
-Add this to **Valid OAuth Redirect URIs** in the Meta app dashboard first:
+First, add this to **Valid OAuth Redirect URIs** in your Meta app dashboard:
 
 ```
 <NEXT_PUBLIC_APP_URL>/admin/channels/connect/meta/callback
 ```
 
-Asset discovery is per-product and failure-tolerant: an app without WhatsApp permissions still lists and connects its Pages, and the reason the other product failed is shown as a warning.
+Then press **Connect with Meta**. What happens:
+
+1. A CSRF `state` cookie is set and you are redirected to Facebook's login dialog.
+2. The callback verifies `state` with a constant-time compare, exchanges the code, and **upgrades the result to a long-lived token** — a short-lived one expires in about an hour and would take every stored Page token down with it. It is parked in an encrypted, httpOnly cookie for 15 minutes.
+3. You pick which Pages, Instagram accounts, and WhatsApp numbers to attach. Assets are re-fetched server-side on submit rather than trusted from the form, so a client cannot post an account it was never authorized for.
+4. Each connected Page is subscribed to `messages`, `messaging_postbacks`, `message_deliveries`, and `message_reads`.
+
+Discovery is failure-tolerant per product: an app without WhatsApp permissions still lists and connects its Pages, and the reason the other product failed is shown as a warning.
 
 ### Connect manually
 
-For LINE (which has no OAuth) and for Meta accounts where you would rather paste a System User token. The form relabels its fields per platform, because the id each one wants differs and getting it wrong is the usual setup mistake:
+For LINE (which has no OAuth) and for Meta accounts where you would rather paste a System User token. The form relabels itself per platform, because each one wants a different id and getting it wrong is the usual setup mistake:
 
-| Platform | `external_account_id` |
-| --- | --- |
-| Messenger | Facebook Page id |
-| Instagram | Instagram Business account id (not the @handle) |
-| WhatsApp | Phone number id (not the phone number) |
-| LINE | Bot user id — the `userId` from `GET /v2/bot/info`, which arrives as `destination` on every webhook |
+| Platform | What goes in "account id" | Where to find it |
+| --- | --- | --- |
+| Messenger | Facebook Page id | Meta dashboard → your Page → About |
+| Instagram | IG Business account id — **not** the @handle | Linked to your Page |
+| WhatsApp | Phone number **id** — not the phone number | WhatsApp → API Setup |
+| LINE | Bot user id | `GET https://api.line.me/v2/bot/info` → `userId` |
 
-**The token is verified against the live platform API before it is stored.** Saving an unusable credential would leave a channel that looks connected and silently drops every reply.
+That LINE bot user id is what arrives as `destination` on every LINE webhook, which is how messages get routed to the right channel.
+
+**The token is verified against the live platform before it is stored.** Saving an unusable credential would leave a channel that looks connected and silently drops every reply.
 
 ### Managing a channel
 
-- **Test** re-verifies the stored credential and writes the result back to `status`, so the list reflects reality rather than a stale `active` from whenever it was first connected.
-- **Disconnect** sets `status = disconnected` and keeps all history.
-- **Delete** removes the row — and `conversations`/`messages` cascade from it, so the UI confirms first.
+- **Test** — re-verifies the stored credential and writes the result back to `status`, so the list reflects reality rather than a stale `active` from whenever it was first connected.
+- **Rename** — cosmetic; never touches the stored token.
+- **Disconnect** — sets `status = disconnected`, keeps all history.
+- **Delete** — removes the row. `conversations` and `messages` cascade from it, so the UI confirms first.
 
-Reconnecting an account that already exists updates the row in place instead of failing on the `(platform, external_account_id)` unique index, so an expired token can be swapped without losing conversations. Renaming a channel does not touch its stored token.
+Reconnecting an account that already exists updates the row in place instead of failing the unique index, so an expired token can be swapped without losing conversations.
 
-Tokens are encrypted with AES-256-GCM under `APP_ENCRYPTION_KEY` before they reach Postgres, and the credential columns are revoked from the `authenticated` role — so channel writes that touch a token run on the service client, while renames, status changes, and deletes go through the user client where RLS re-checks the admin role.
+---
 
-## Webhook endpoints
+## Receiving messages: webhooks
 
-The scaffold includes these routes:
+```
+/api/webhooks/messenger
+/api/webhooks/instagram
+/api/webhooks/whatsapp
+/api/webhooks/line
+```
 
-- `/api/webhooks/messenger`
-- `/api/webhooks/instagram`
-- `/api/webhooks/whatsapp`
-- `/api/webhooks/line`
+Register `<NEXT_PUBLIC_APP_URL>/api/webhooks/<platform>` in each platform's dashboard. For Meta, also enter your `META_VERIFY_TOKEN` when prompted.
 
-Each webhook path currently does the following:
+### Local development
 
-1. Verifies the signature with the adapter for that platform, against the raw request body.
-2. Normalizes the payload into internal messages and delivery receipts.
-3. Resolves the `channels` row by the platform's own account id (Page id, WhatsApp `phone_number_id`, LINE `destination`), falling back to the first channel on that platform.
-4. Skips any message whose `platform_message_id` is already stored, since platforms redeliver until they get a 200.
-5. Upserts a conversation and inserts the inbound message.
+Platforms need a public HTTPS URL. Use a tunnel:
+
+```bash
+cloudflared tunnel --url http://localhost:3000     # or: ngrok http 3000
+```
+
+Then set `NEXT_PUBLIC_APP_URL` to the tunnel URL, restart the dev server, and register that URL. It changes each time the tunnel restarts unless you have a reserved one.
+
+### What each webhook does
+
+1. Verifies the signature against the **raw request body**.
+2. Normalizes the payload into messages and delivery receipts.
+3. Resolves the `channels` row by the platform's own account id — Page id, WhatsApp `phone_number_id`, LINE `destination` — so two accounts on the same platform never collide.
+4. Skips any message whose `platform_message_id` is already stored.
+5. Upserts the conversation and inserts the message.
 6. Applies delivery/read receipts to previously sent messages.
 7. Emits Socket.io events to the org and conversation rooms.
-8. Returns 200 immediately; contact profile lookups run detached.
+8. Returns 200 immediately. Contact profile lookups run detached, because a slow enrichment call must never delay the acknowledgement.
 
-Signature verification is mandatory. If `META_APP_SECRET` (Meta) or `LINE_CHANNEL_SECRET` (LINE) is unset, the corresponding webhook rejects every request rather than accepting unsigned payloads.
+**Signature verification is mandatory.** If `META_APP_SECRET` or `LINE_CHANNEL_SECRET` is unset, that webhook rejects everything rather than accepting unsigned payloads — an unsigned webhook endpoint lets anyone inject messages into your inbox.
 
-Messenger and Instagram echo events (`message.is_echo`) are dropped — they are the app's own outbound replies coming back, and ingesting them would duplicate every agent reply as a customer message.
+Messenger and Instagram echo events (`message.is_echo`) are dropped: they are your own outbound replies coming back, and ingesting them would duplicate every agent reply as a customer message.
 
-### WhatsApp Cloud API development setup
+### WhatsApp Cloud API quick start
 
-1. In the Meta developer dashboard, add **WhatsApp** to your app and open **WhatsApp > API Setup**.
-2. Copy the temporary access token and phone-number ID into `WHATSAPP_ACCESS_TOKEN` and `WHATSAPP_PHONE_NUMBER_ID` in `.env.local`.
-3. Set `WHATSAPP_VERIFY_TOKEN` to a long random value. In Meta's webhook settings, use `https://your-public-url/api/webhooks/whatsapp` as the callback URL and enter the same value as the verify token.
-4. Subscribe to the `messages` webhook field. Meta signs POST requests with `META_APP_SECRET`; set that variable so production callbacks are verified.
-5. Add your personal WhatsApp number as a test recipient in **API Setup**, then send a message from that number to Meta's test sender number. The message should appear in the inbox.
+1. In the Meta dashboard, add **WhatsApp** to your app and open **WhatsApp → API Setup**.
+2. Connect the number in Unibox (OAuth, or manually with the phone number id and token).
+3. Set the callback to `<NEXT_PUBLIC_APP_URL>/api/webhooks/whatsapp` with your verify token, and subscribe to the `messages` field.
+4. Add your own number as a test recipient, then message the test sender number.
 
-For local development, expose the dev server with an HTTPS tunnel such as Cloudflare Tunnel or ngrok and use that public URL for the webhook. The Meta test number can only communicate with allow-listed test recipients. Outbound free-form messages are subject to WhatsApp's customer-service window; template messages are required outside it.
+Tokens from API Setup are temporary and **expire after 24 hours**. Use a System User token (Business Settings → System Users) for anything longer than a test session.
 
-## Send-message path
+---
 
-The inbox composer posts to `/api/send-message`.
+## Sending messages
 
-That route:
+The composer posts to `/api/send-message`, which:
 
-1. Loads the conversation.
-2. Resolves the channel platform.
-3. Chooses the platform adapter.
-4. Sends the outbound message through the adapter.
-5. Stores the outbound message in Postgres.
-6. Emits a live update event.
+1. Requires a signed-in user whose role can reply.
+2. Loads the conversation **through the caller's own client**, so RLS decides what they can see — an agent who is not assigned the thread gets a 404, not a reply.
+3. Enforces the WhatsApp 24-hour window (409 if closed).
+4. Decrypts the channel token and sends through the platform adapter.
+5. **Only then** writes the message row. If the platform rejects it, nothing is stored and the error is returned — a bubble that looks delivered for a message the customer never got is worse than an error.
+6. Emits the live update.
 
-## Auth and roles
+`sender_id` comes from the session, never the request body, so a caller cannot attribute a message to another agent.
 
-The spec uses Supabase Auth plus `org_users.role`:
+---
 
-- `admin` - manage channels, agents, assignments, and analytics.
-- `agent` - work assigned/unassigned conversations, reply, add notes.
-- `viewer` - read-only.
+## Security model
 
-This scaffold does not yet implement the full auth flow. It is structured so auth can be added without changing the core inbox data model.
+Three independent layers, so a bug in one does not open the app:
 
-## Current limitations
+1. **Middleware** (`middleware.ts`) refreshes the session and blocks anonymous requests. Pages get redirected to `/login?next=…`; `/api/*` gets a JSON 401. Webhook and health routes are excluded — a platform callback has no session, and gating it would reject every real delivery.
+2. **Page and action guards** (`lib/auth.ts`) re-check the role server-side. Server actions are public HTTP endpoints, so each one calls `requireRole` itself rather than trusting the page that rendered its form.
+3. **Postgres RLS** is the backstop. Everything a person triggers queries through a client carrying their JWT, so the policies actually run.
 
-- Invites are not emailed — the admin copies the `/join/<token>` link manually.
-- WhatsApp channels connected through OAuth store the long-lived **user** token, which expires in about 60 days. Use a System User token via manual connect for a credential that does not rotate.
-- Meta permissions like `pages_messaging` need App Review before the connect flow works for accounts outside your app's development roles.
-- One workspace per account. Accepting an invite while already a member of another org is rejected rather than supported.
-- Assignment, internal notes, and channel setup render read-only; the CRUD actions are not wired.
-- WhatsApp sends text only. Template messages (needed outside the 24-hour window) and media sends are not implemented.
-- LINE webhook verification uses a single `LINE_CHANNEL_SECRET`, so one LINE channel per deployment. Meta platforms sign with one app secret and support multiple accounts already.
-- `/api/media/whatsapp/[mediaId]` proxies WhatsApp media and is unauthenticated, like the rest of the app.
+**Column privileges do what RLS cannot.** `channels.access_token_encrypted` and `webhook_secret` are revoked from the `authenticated` role outright. RLS filters rows, not columns — without the revoke, any org member could read the platform tokens on a channel row already visible to them.
 
-## Next implementation steps
+**The service role key is used in exactly four places**, each documented at the call site: webhook ingestion, signup (the org must exist before you can be a member of it), invite acceptance (the invitee is not a member yet), and decrypting channel credentials to send.
 
-1. Add the Meta OAuth connect flow so admins can attach a Page/IG account without hand-writing rows.
-2. Send invite emails instead of surfacing a copyable link.
-3. Implement template and media sends for WhatsApp Cloud API.
-4. Wire admin CRUD for channels.
-5. Add note creation and assignment actions in the inbox.
+**Socket rooms are server-assigned.** The client sends its access token in the handshake and the server derives the room from it — a client cannot ask to join another workspace's room.
 
-## Notes for production
+**Other properties:** `?next=` is validated as a relative path so it cannot become an open redirect; invite tokens are 256-bit, single-use, and expire in 7 days; OAuth state is compared in constant time; platform tokens are AES-256-GCM encrypted before reaching Postgres.
 
-- Keep service role keys server-only.
-- Encrypt channel access tokens before writing them to Postgres.
-- Keep webhook verification strict per provider.
-- Treat direct channel message sending as a server-only operation.
-- Add audit logging before allowing destructive admin actions.
+---
+
+## Troubleshooting
+
+**"Supabase is not configured" on startup, but my env vars are set.**
+Restart the server. `.env.local` is read at startup, and `pnpm dev` loads it during Next's prepare step.
+
+**Inbox is empty and the log says `column conversations.last_inbound_at does not exist`.**
+Run `supabase/schema.sql`. When Supabase is configured but a query fails, the app returns empty results and logs the cause rather than substituting demo rows — a silent fallback makes a broken query look like an empty inbox.
+
+**Channel says connected, but no messages arrive.**
+Almost always the webhook. Check the URL is registered and reachable, the verify token matches, and — for Messenger — that the Page is subscribed (reconnecting via OAuth does this for you). A `401 Invalid webhook signature` in the logs means `META_APP_SECRET` or `LINE_CHANNEL_SECRET` is wrong or unset.
+
+**Replies fail with "Session has expired".**
+The Meta token expired. Temporary API Setup tokens last 24 hours; OAuth user tokens about 60 days. Reconnect the channel, or press **Test** to confirm.
+
+**The socket pill says offline.**
+In a Supabase-configured deployment the handshake requires a valid access token. Confirm you are signed in; the app still works, you just need to refresh for new messages.
+
+**`Unknown path components: /me` from the Graph API.**
+`META_GRAPH_API_VERSION` is set past what Meta recognizes. `v26.0` is the current maximum; anything higher is parsed as part of the path.
+
+---
+
+## Limitations
+
+- **Invites are not emailed** — the admin copies a `/join/<token>` link.
+- **Assignment, closing, and note creation are read-only in the UI.** The data model and store functions exist; the buttons are not wired.
+- **WhatsApp sends text only.** Template messages (needed outside the 24-hour window) and outbound media are not implemented.
+- **WhatsApp channels connected via OAuth store the long-lived user token**, which expires in ~60 days. A System User token via manual connect does not rotate.
+- **LINE verification uses a single `LINE_CHANNEL_SECRET`**, so one LINE channel per deployment. Meta platforms sign with one app secret and already support multiple accounts.
+- **One workspace per account.** Accepting an invite while already a member of another org is rejected rather than supported.
+- **Meta App Review** is required for `pages_messaging` and friends before the connect flow works for accounts outside your app's development roles.
+- **No audit log** on destructive admin actions.
+- **WeChat is out of scope** — see the note at the end of `docs/base.md`.
+
+---
+
+## Roadmap
+
+1. Send invite emails instead of surfacing a copyable link.
+2. Wire assignment, close/reopen, and note creation in the inbox.
+3. WhatsApp template and media sends.
+4. Per-channel LINE secrets so one deployment can serve several LINE accounts.
+5. Response-time analytics — needs a first-response timestamp per conversation, which the schema does not record yet.
+6. Audit logging for admin actions.
+
+---
+
+## Production notes
+
+- Keep the service role key server-only, and back up `APP_ENCRYPTION_KEY`.
+- Never deploy without Supabase env vars set — that silently enables demo mode, which has no auth.
+- Prefer System User tokens over the temporary ones from API Setup.
+- Keep `META_GRAPH_API_VERSION` current; Meta retires versions on a schedule.
+- Rotate `APP_ENCRYPTION_KEY` by re-encrypting `channels.access_token_encrypted` — there is no migration helper for this yet.
