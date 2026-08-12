@@ -64,10 +64,10 @@ The app can run in demo mode with no keys set. To connect real services, add the
 | `META_APP_SECRET` | required for Messenger/Instagram webhooks | Used to verify `X-Hub-Signature-256`. |
 | `META_VERIFY_TOKEN` | required for Messenger/Instagram webhooks | Shared verify token for webhook challenge requests. |
 | `META_PAGE_ACCESS_TOKEN` | required for Messenger/Instagram sending | Page/IG send token, kept server-side only. |
-| `WHATSAPP_BSP_ACCOUNT_SID` | required for WhatsApp BSP | BSP account identifier, depending on Twilio/360dialog setup. |
-| `WHATSAPP_BSP_AUTH_TOKEN` | required for WhatsApp BSP | BSP auth token. |
-| `WHATSAPP_WEBHOOK_SECRET` | recommended for WhatsApp webhooks | Shared secret for verifying inbound callbacks in this scaffold. |
-| `WHATSAPP_FROM_NUMBER` | required for WhatsApp sending | Provisioned WhatsApp sender number or BSP channel identifier. |
+| `WHATSAPP_ACCESS_TOKEN` | required for WhatsApp sending | Meta Cloud API access token. Keep it server-side only. |
+| `WHATSAPP_PHONE_NUMBER_ID` | required for WhatsApp sending | Meta Cloud API phone-number ID, not the phone number itself. |
+| `WHATSAPP_VERIFY_TOKEN` | required for WhatsApp webhooks | Secret value you choose and enter in Meta's webhook configuration. |
+| `META_GRAPH_API_VERSION` | recommended | Meta Graph API version used for WhatsApp sends; update it before Meta retires the selected version. |
 | `LINE_CHANNEL_ACCESS_TOKEN` | required for LINE sending | LINE Messaging API access token. |
 | `LINE_CHANNEL_SECRET` | required for LINE webhook verification | Used to validate `X-Line-Signature`. |
 | `LINE_VERIFY_TOKEN` | optional | Reserved for future setup flows if you want an extra shared challenge token. |
@@ -112,6 +112,16 @@ Each webhook path currently does the following:
 4. Inserts an inbound message.
 5. Emits Socket.io events to the org and conversation rooms.
 
+### WhatsApp Cloud API development setup
+
+1. In the Meta developer dashboard, add **WhatsApp** to your app and open **WhatsApp > API Setup**.
+2. Copy the temporary access token and phone-number ID into `WHATSAPP_ACCESS_TOKEN` and `WHATSAPP_PHONE_NUMBER_ID` in `.env.local`.
+3. Set `WHATSAPP_VERIFY_TOKEN` to a long random value. In Meta's webhook settings, use `https://your-public-url/api/webhooks/whatsapp` as the callback URL and enter the same value as the verify token.
+4. Subscribe to the `messages` webhook field. Meta signs POST requests with `META_APP_SECRET`; set that variable so production callbacks are verified.
+5. Add your personal WhatsApp number as a test recipient in **API Setup**, then send a message from that number to Meta's test sender number. The message should appear in the inbox.
+
+For local development, expose the dev server with an HTTPS tunnel such as Cloudflare Tunnel or ngrok and use that public URL for the webhook. The Meta test number can only communicate with allow-listed test recipients. Outbound free-form messages are subject to WhatsApp's customer-service window; template messages are required outside it.
+
 ## Send-message path
 
 The inbox composer posts to `/api/send-message`.
@@ -137,15 +147,14 @@ This scaffold does not yet implement the full auth flow. It is structured so aut
 
 ## Current limitations
 
-- Adapter send methods still return stubbed platform message IDs rather than calling real provider APIs.
-- WhatsApp is abstracted at the BSP level but not bound to a specific provider yet.
+- Messenger, Instagram, and LINE send adapters remain stubs. WhatsApp sends through Meta Cloud API.
 - Assignment, internal notes, and channel setup are represented in UI/data shape, but the full CRUD flow is not wired.
 
 ## Next implementation steps
 
 1. Add Supabase Auth pages and org invite flow.
 2. Implement real Meta OAuth + webhook signing for Messenger/Instagram.
-3. Connect a real WhatsApp BSP.
+3. Implement template and media sends for WhatsApp Cloud API.
 4. Wire admin CRUD for channels and agents.
 5. Add note creation and assignment actions in the inbox.
 
