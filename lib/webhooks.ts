@@ -7,6 +7,7 @@ import {
   updateMessageStatus,
   upsertConversation
 } from "@/lib/store";
+import { createServiceClient, isSupabaseConfigured, type Db } from "@/lib/supabase";
 import type { Channel, Platform } from "@/lib/types";
 import { emitOrgEvent, emitConversationEvent } from "@/lib/socket";
 
@@ -29,6 +30,11 @@ export async function processWebhook(platform: Platform, request: Request) {
     return Response.json({ error: "Malformed webhook payload" }, { status: 400 });
   }
 
+  // Inbound messages have no signed-in user behind them, and the platform
+  // signature is the authentication. RLS cannot express "this request came from
+  // Meta", so ingestion runs on the service client.
+  const db: Db = isSupabaseConfigured() ? createServiceClient() : null;
+
   const { messages, statuses } = adapter.parseIncoming(payload);
 
   // One lookup per distinct account id instead of one per event.
@@ -36,7 +42,7 @@ export async function processWebhook(platform: Platform, request: Request) {
   const resolveChannel = async (accountId?: string) => {
     const key = accountId ?? "__default__";
     if (!channelCache.has(key)) {
-      channelCache.set(key, await findChannelForEvent(platform, accountId));
+      channelCache.set(key, await findChannelForEvent(db, platform, accountId));
     }
     return channelCache.get(key);
   };
@@ -55,18 +61,18 @@ export async function processWebhook(platform: Platform, request: Request) {
 
     // Platforms redeliver until they see a 200, so the same message id can
     // arrive several times.
-    if (await messageExists(event.platformMessageId)) {
+    if (await messageExists(db, event.platformMessageId)) {
       duplicates += 1;
       continue;
     }
 
-    const conversation = await upsertConversation({
+    const conversation = await upsertConversation(db, {
       channelId: channel.id,
       externalContactId: event.externalContactId,
       contactName: event.contactName
     });
 
-    const message = await insertMessage({
+    const message = await insertMessage(db, {
       conversationId: conversation.id,
       direction: "inbound",
       senderType: "customer",
@@ -93,12 +99,12 @@ export async function processWebhook(platform: Platform, request: Request) {
     // Profile enrichment is a second round-trip to the platform. It must not
     // hold up the webhook ack, so it runs detached.
     if (!conversation.contactName || conversation.contactName === conversation.externalContactId) {
-      profileLookups.push(enrichContact(channel, conversation.id, event.externalContactId, platform));
+      profileLookups.push(enrichContact(db, channel, conversation.id, event.externalContactId, platform));
     }
   }
 
   for (const receipt of statuses) {
-    await updateMessageStatus(receipt.platformMessageId, receipt.status);
+    await updateMessageStatus(db, receipt.platformMessageId, receipt.status);
   }
 
   for (const orgId of orgIds) {
@@ -112,6 +118,7 @@ export async function processWebhook(platform: Platform, request: Request) {
 }
 
 async function enrichContact(
+  db: Db,
   channel: Channel,
   conversationId: string,
   externalContactId: string,
@@ -123,9 +130,9 @@ async function enrichContact(
   }
 
   try {
-    const authorized = await authorizeChannel(channel);
+    const authorized = await authorizeChannel(db, channel);
     const profile = await adapter.fetchContactProfile(authorized, externalContactId);
-    await upsertConversation({
+    await upsertConversation(db, {
       channelId: channel.id,
       externalContactId,
       contactName: profile.name,

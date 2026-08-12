@@ -1,11 +1,18 @@
 import { AppShell } from "@/components/shell";
 import { PlatformIcon, platformLabel } from "@/components/platform-badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { getDemoSnapshot, summarizeInbox } from "@/lib/store";
+import { getSnapshot, summarizeInbox } from "@/lib/store";
+import { requireRole } from "@/lib/auth";
 import { platforms } from "@/lib/types";
 
 export default async function AnalyticsPage() {
-  const [stats, snapshot] = await Promise.all([summarizeInbox(), getDemoSnapshot()]);
+  // Agents have no analytics surface in the spec; admins and viewers do.
+  const session = await requireRole(["admin", "viewer"], "/admin/analytics");
+  const { db, member, organization } = session;
+  const [stats, snapshot] = await Promise.all([
+    summarizeInbox(db, member.orgId),
+    getSnapshot(db, member.orgId)
+  ]);
 
   const channelById = new Map(snapshot.channels.map(channel => [channel.id, channel]));
   const volumeByPlatform = platforms.map(platform => ({
@@ -28,6 +35,12 @@ export default async function AnalyticsPage() {
       title="Analytics"
       subtitle="Live counts for the current organization"
       active="/admin/analytics"
+      viewer={{
+        displayName: member.displayName,
+        role: member.role,
+        organizationName: organization.name,
+        isDemo: session.isDemo
+      }}
     >
       <div className="flex flex-col gap-6">
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">

@@ -6,11 +6,16 @@ import { PlatformIcon, platformLabel } from "@/components/platform-badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { StatusDot } from "@/components/ui/status-dot";
-import { getDemoSnapshot, summarizeInbox } from "@/lib/store";
-import { isDemoMode } from "@/lib/env";
+import { getSnapshot, summarizeInbox } from "@/lib/store";
+import { requireSession } from "@/lib/auth";
 
 export default async function HomePage() {
-  const [stats, snapshot] = await Promise.all([summarizeInbox(), getDemoSnapshot()]);
+  const session = await requireSession("/");
+  const { db, member, organization } = session;
+  const [stats, snapshot] = await Promise.all([
+    summarizeInbox(db, member.orgId),
+    getSnapshot(db, member.orgId)
+  ]);
 
   const metrics = [
     { label: "Open conversations", value: stats.openCount },
@@ -22,8 +27,14 @@ export default async function HomePage() {
   return (
     <AppShell
       title="Overview"
-      subtitle={isDemoMode() ? "Running on seeded demo data" : "Connected to Supabase"}
+      subtitle={session.isDemo ? "Running on seeded demo data" : organization.name}
       active="/"
+      viewer={{
+        displayName: member.displayName,
+        role: member.role,
+        organizationName: organization.name,
+        isDemo: session.isDemo
+      }}
       actions={
         <Button asChild size="sm">
           <Link href="/inbox">

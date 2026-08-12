@@ -3,7 +3,8 @@ import { PlatformIcon, platformLabel } from "@/components/platform-badge";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import { StatusDot } from "@/components/ui/status-dot";
-import { getDemoSnapshot } from "@/lib/store";
+import { getSnapshot } from "@/lib/store";
+import { requireRole } from "@/lib/auth";
 import { formatDateTime } from "@/lib/format";
 import { platforms } from "@/lib/types";
 
@@ -15,7 +16,9 @@ const WEBHOOK_PATH = {
 } as const;
 
 export default async function ChannelsPage() {
-  const snapshot = await getDemoSnapshot();
+  const session = await requireRole(["admin"], "/admin/channels");
+  const { db, member, organization } = session;
+  const snapshot = await getSnapshot(db, member.orgId);
   const connected = new Set(snapshot.channels.map(channel => channel.platform));
 
   return (
@@ -23,6 +26,12 @@ export default async function ChannelsPage() {
       title="Channels"
       subtitle="Connected social accounts and the webhook URL each platform should call"
       active="/admin/channels"
+      viewer={{
+        displayName: member.displayName,
+        role: member.role,
+        organizationName: organization.name,
+        isDemo: session.isDemo
+      }}
     >
       <div className="flex flex-col gap-6">
         <div className="grid gap-3 md:grid-cols-2">

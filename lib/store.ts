@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { decryptSecret } from "@/lib/crypto";
 import { demoChannels, demoConversations, demoMessages, demoNotes, demoOrg, demoUsers } from "@/lib/mock-data";
-import { createServerSupabaseClient } from "@/lib/supabase";
+import type { Db } from "@/lib/supabase";
 import type {
   AuthorizedChannel,
   Channel,
@@ -14,6 +14,13 @@ import type {
   Organization,
   Platform
 } from "@/lib/types";
+
+/**
+ * Every function here takes the Supabase client explicitly. Pages and actions
+ * pass a user-scoped client so RLS applies; webhooks pass the service client
+ * because there is no signed-in user behind an inbound message. A `null` client
+ * means Supabase is not configured and the seeded demo state is used instead.
+ */
 
 type OrganizationRow = {
   id: string;
@@ -77,7 +84,7 @@ type InternalNoteRow = {
   created_at: string | null;
 };
 
-type StoreSnapshot = {
+export type StoreSnapshot = {
   organization: Organization;
   users: OrgUser[];
   channels: Channel[];
@@ -104,8 +111,6 @@ type NewMessageInput = {
   platformMessageId?: string;
   status?: MessageStatus;
 };
-
-const client = createServerSupabaseClient();
 
 // Column lists are named so that credential columns (access_token_encrypted,
 // webhook_secret) can never leak into a query that feeds the UI.
@@ -238,42 +243,94 @@ function toNote(row: InternalNoteRow): InternalNote {
   };
 }
 
-async function getActiveOrganizationRow() {
-  if (!client) {
-    return null;
+// ---------------------------------------------------------------------------
+// Organizations and membership
+// ---------------------------------------------------------------------------
+
+export async function findOrganization(db: Db, orgId: string): Promise<Organization | undefined> {
+  if (!db) {
+    return getDemoState().organizations.find(entry => entry.id === orgId) ?? demoOrg;
   }
 
-  const { data, error } = await client
+  const { data } = await db
     .from("organizations")
     .select(ORGANIZATION_COLUMNS)
-    .order("created_at", { ascending: true })
-    .limit(1)
+    .eq("id", orgId)
     .maybeSingle<OrganizationRow>();
 
+  return data ? toOrganization(data) : undefined;
+}
+
+/** Resolves the caller's membership row from their Supabase Auth user id. */
+export async function findMembership(db: Db, authUserId: string): Promise<OrgUser | undefined> {
+  if (!db) {
+    return getDemoState().users.find(user => user.authUserId === authUserId) ?? demoUsers[0];
+  }
+
+  const { data, error } = await db
+    .from("org_users")
+    .select(ORG_USER_COLUMNS)
+    .eq("auth_user_id", authUserId)
+    .maybeSingle<OrgUserRow>();
+
+  if (reportQueryError("org_users", error) || !data) {
+    return undefined;
+  }
+
+  return toOrgUser(data);
+}
+
+export async function listOrgUsers(db: Db, orgId: string): Promise<OrgUser[]> {
+  if (!db) {
+    return clone(getDemoState().users);
+  }
+
+  const { data, error } = await db
+    .from("org_users")
+    .select(ORG_USER_COLUMNS)
+    .eq("org_id", orgId)
+    .order("created_at", { ascending: true });
+
+  if (reportQueryError("org_users", error)) {
+    return [];
+  }
+
+  return (data ?? []).map(toOrgUser);
+}
+
+export async function findUser(db: Db, userId: string): Promise<OrgUser | undefined> {
+  if (!db) {
+    return getDemoState().users.find(user => user.id === userId);
+  }
+
+  const { data, error } = await db
+    .from("org_users")
+    .select(ORG_USER_COLUMNS)
+    .eq("id", userId)
+    .maybeSingle<OrgUserRow>();
+
   if (error || !data) {
-    return null;
+    return undefined;
   }
 
-  return data;
+  return toOrgUser(data);
 }
 
-async function getActiveOrganizationId() {
-  const row = await getActiveOrganizationRow();
-  return row?.id ?? demoOrg.id;
-}
+// ---------------------------------------------------------------------------
+// Snapshots
+// ---------------------------------------------------------------------------
 
-async function getOrgSnapshotFromSupabase(platformFilter?: Platform): Promise<StoreSnapshot | null> {
-  if (!client) {
+async function getOrgSnapshotFromSupabase(
+  db: NonNullable<Db>,
+  orgId: string,
+  platformFilter?: Platform
+): Promise<StoreSnapshot | null> {
+  const organization = await findOrganization(db, orgId);
+  if (!organization) {
     return null;
   }
 
-  const organizationRow = await getActiveOrganizationRow();
-  if (!organizationRow) {
-    return null;
-  }
-
-  const orgId = organizationRow.id;
-  const channelQuery = client
+  const channelQuery = db
     .from("channels")
     .select(CHANNEL_COLUMNS)
     .eq("org_id", orgId)
@@ -290,11 +347,9 @@ async function getOrgSnapshotFromSupabase(platformFilter?: Platform): Promise<St
   const channels = (channelsResult.data ?? []).map(toChannel);
   const channelIds = channels.map(channel => channel.id);
   const conversationsResult = channelIds.length
-    ? await client
+    ? await db
         .from("conversations")
-        .select(
-          CONVERSATION_COLUMNS
-        )
+        .select(CONVERSATION_COLUMNS)
         .eq("org_id", orgId)
         .in("channel_id", channelIds)
         .order("last_message_at", { ascending: false, nullsFirst: false })
@@ -308,22 +363,16 @@ async function getOrgSnapshotFromSupabase(platformFilter?: Platform): Promise<St
   const conversationIds = conversations.map(conversation => conversation.id);
 
   const [usersResult, messagesResult, notesResult] = await Promise.all([
-    client
-      .from("org_users")
-      .select(ORG_USER_COLUMNS)
-      .eq("org_id", orgId)
-      .order("created_at", { ascending: true }),
+    db.from("org_users").select(ORG_USER_COLUMNS).eq("org_id", orgId).order("created_at", { ascending: true }),
     conversationIds.length
-      ? client
+      ? db
           .from("messages")
-          .select(
-            MESSAGE_COLUMNS
-          )
+          .select(MESSAGE_COLUMNS)
           .in("conversation_id", conversationIds)
           .order("created_at", { ascending: true })
       : Promise.resolve({ data: [], error: null } as const),
     conversationIds.length
-      ? client
+      ? db
           .from("internal_notes")
           .select(NOTE_COLUMNS)
           .in("conversation_id", conversationIds)
@@ -340,7 +389,7 @@ async function getOrgSnapshotFromSupabase(platformFilter?: Platform): Promise<St
   }
 
   return clone({
-    organization: toOrganization(organizationRow),
+    organization,
     users: (usersResult.data ?? []).map(toOrgUser),
     channels,
     conversations,
@@ -371,22 +420,26 @@ function getDemoSnapshotSync(platformFilter?: Platform): StoreSnapshot {
   });
 }
 
-async function getSnapshot(platformFilter?: Platform): Promise<StoreSnapshot> {
+export async function getSnapshot(
+  db: Db,
+  orgId: string,
+  platformFilter?: Platform
+): Promise<StoreSnapshot> {
   // Demo data is a fallback for "no Supabase configured", not for "Supabase
   // returned an error" — mixing seeded rows into a live deployment hides real
   // failures behind plausible-looking content.
-  if (!client) {
+  if (!db) {
     return getDemoSnapshotSync(platformFilter);
   }
 
-  const snapshot = await getOrgSnapshotFromSupabase(platformFilter);
+  const snapshot = await getOrgSnapshotFromSupabase(db, orgId, platformFilter);
   if (snapshot) {
     return snapshot;
   }
 
-  const organizationRow = await getActiveOrganizationRow();
+  const organization = await findOrganization(db, orgId);
   return {
-    organization: organizationRow ? toOrganization(organizationRow) : { ...demoOrg, name: "Unknown organization" },
+    organization: organization ?? { ...demoOrg, id: orgId, name: "Unknown organization" },
     users: [],
     channels: [],
     conversations: [],
@@ -395,36 +448,16 @@ async function getSnapshot(platformFilter?: Platform): Promise<StoreSnapshot> {
   };
 }
 
-export async function getDemoSnapshot(platformFilter?: Platform) {
-  return getSnapshot(platformFilter);
-}
+// ---------------------------------------------------------------------------
+// Channels
+// ---------------------------------------------------------------------------
 
-export async function findConversation(conversationId: string): Promise<Conversation | undefined> {
-  if (!client) {
-    return getDemoState().conversations.find(conversation => conversation.id === conversationId);
-  }
-
-  const { data, error } = await client
-    .from("conversations")
-    .select(
-      CONVERSATION_COLUMNS
-    )
-    .eq("id", conversationId)
-    .maybeSingle<ConversationRow>();
-
-  if (error || !data) {
-    return undefined;
-  }
-
-  return toConversation(data);
-}
-
-export async function findChannel(channelId: string): Promise<Channel | undefined> {
-  if (!client) {
+export async function findChannel(db: Db, channelId: string): Promise<Channel | undefined> {
+  if (!db) {
     return getDemoState().channels.find(channel => channel.id === channelId);
   }
 
-  const { data, error } = await client
+  const { data, error } = await db
     .from("channels")
     .select(CHANNEL_COLUMNS)
     .eq("id", channelId)
@@ -437,13 +470,16 @@ export async function findChannel(channelId: string): Promise<Channel | undefine
   return toChannel(data);
 }
 
-export async function findChannelByPlatform(platform: Platform): Promise<Channel | undefined> {
-  if (!client) {
+export async function findChannelByPlatform(
+  db: Db,
+  orgId: string,
+  platform: Platform
+): Promise<Channel | undefined> {
+  if (!db) {
     return getDemoState().channels.find(channel => channel.platform === platform);
   }
 
-  const orgId = await getActiveOrganizationId();
-  const { data, error } = await client
+  const { data, error } = await db
     .from("channels")
     .select(CHANNEL_COLUMNS)
     .eq("org_id", orgId)
@@ -462,47 +498,62 @@ export async function findChannelByPlatform(platform: Platform): Promise<Channel
 /**
  * Resolves the channel a webhook event belongs to. Matching on the platform's
  * own account id (Page id, WhatsApp phone number id, LINE destination) is what
- * keeps two accounts on the same platform from colliding; the platform-only
- * lookup is a fallback for single-account setups and local testing.
+ * keeps two accounts on the same platform from colliding. There is no org
+ * context here — the channel row is what tells us which org the event belongs
+ * to — so this must run on the service client.
  */
 export async function findChannelForEvent(
+  db: Db,
   platform: Platform,
   accountId?: string
 ): Promise<Channel | undefined> {
-  if (!accountId) {
-    return findChannelByPlatform(platform);
-  }
-
-  if (!client) {
+  if (!db) {
     const state = getDemoState();
     return (
-      state.channels.find(
-        channel => channel.platform === platform && channel.externalAccountId === accountId
-      ) ?? state.channels.find(channel => channel.platform === platform)
+      (accountId
+        ? state.channels.find(
+            channel => channel.platform === platform && channel.externalAccountId === accountId
+          )
+        : undefined) ?? state.channels.find(channel => channel.platform === platform)
     );
   }
 
-  const { data } = await client
+  if (accountId) {
+    const { data } = await db
+      .from("channels")
+      .select(CHANNEL_COLUMNS)
+      .eq("platform", platform)
+      .eq("external_account_id", accountId)
+      .limit(1)
+      .maybeSingle<ChannelRow>();
+
+    if (data) {
+      return toChannel(data);
+    }
+  }
+
+  const { data } = await db
     .from("channels")
     .select(CHANNEL_COLUMNS)
     .eq("platform", platform)
-    .eq("external_account_id", accountId)
+    .order("created_at", { ascending: false })
     .limit(1)
     .maybeSingle<ChannelRow>();
 
-  return data ? toChannel(data) : findChannelByPlatform(platform);
+  return data ? toChannel(data) : undefined;
 }
 
 /**
- * Loads a channel together with its decrypted credentials. Server-only — the
- * result must never be returned to a page or serialized to the client.
+ * Loads a channel together with its decrypted credentials. The credential
+ * columns are revoked from the `authenticated` role in Postgres, so this only
+ * returns anything when called with the service client.
  */
-export async function authorizeChannel(channel: Channel): Promise<AuthorizedChannel> {
-  if (!client) {
+export async function authorizeChannel(db: Db, channel: Channel): Promise<AuthorizedChannel> {
+  if (!db) {
     return { ...channel, credentials: {} };
   }
 
-  const { data } = await client
+  const { data } = await db
     .from("channels")
     .select("access_token_encrypted, webhook_secret")
     .eq("id", channel.id)
@@ -517,19 +568,39 @@ export async function authorizeChannel(channel: Channel): Promise<AuthorizedChan
   };
 }
 
+// ---------------------------------------------------------------------------
+// Conversations and messages
+// ---------------------------------------------------------------------------
+
+export async function findConversation(db: Db, conversationId: string): Promise<Conversation | undefined> {
+  if (!db) {
+    return getDemoState().conversations.find(conversation => conversation.id === conversationId);
+  }
+
+  const { data, error } = await db
+    .from("conversations")
+    .select(CONVERSATION_COLUMNS)
+    .eq("id", conversationId)
+    .maybeSingle<ConversationRow>();
+
+  if (error || !data) {
+    return undefined;
+  }
+
+  return toConversation(data);
+}
+
 /** Meta retries a webhook until it gets a 200, so ingestion must be idempotent. */
-export async function messageExists(platformMessageId: string): Promise<boolean> {
+export async function messageExists(db: Db, platformMessageId: string): Promise<boolean> {
   if (!platformMessageId) {
     return false;
   }
 
-  if (!client) {
-    return getDemoState().messages.some(
-      message => message.platformMessageId === platformMessageId
-    );
+  if (!db) {
+    return getDemoState().messages.some(message => message.platformMessageId === platformMessageId);
   }
 
-  const { data } = await client
+  const { data } = await db
     .from("messages")
     .select("id")
     .eq("platform_message_id", platformMessageId)
@@ -541,10 +612,11 @@ export async function messageExists(platformMessageId: string): Promise<boolean>
 
 /** Applies a delivery/read receipt to the outbound message it refers to. */
 export async function updateMessageStatus(
+  db: Db,
   platformMessageId: string,
   status: MessageStatus
 ): Promise<Message | undefined> {
-  if (!client) {
+  if (!db) {
     const message = getDemoState().messages.find(
       entry => entry.platformMessageId === platformMessageId
     );
@@ -554,7 +626,7 @@ export async function updateMessageStatus(
     return message;
   }
 
-  const { data } = await client
+  const { data } = await db
     .from("messages")
     .update({ status })
     .eq("platform_message_id", platformMessageId)
@@ -564,36 +636,16 @@ export async function updateMessageStatus(
   return data ? toMessage(data) : undefined;
 }
 
-export async function findUser(userId: string): Promise<OrgUser | undefined> {
-  if (!client) {
-    return getDemoState().users.find(user => user.id === userId);
-  }
-
-  const { data, error } = await client
-    .from("org_users")
-    .select(ORG_USER_COLUMNS)
-    .eq("id", userId)
-    .maybeSingle<OrgUserRow>();
-
-  if (error || !data) {
-    return undefined;
-  }
-
-  return toOrgUser(data);
-}
-
-export async function getMessagesForConversation(conversationId: string): Promise<Message[]> {
-  if (!client) {
-    return getDemoState().messages
-      .filter(message => message.conversationId === conversationId)
+export async function getMessagesForConversation(db: Db, conversationId: string): Promise<Message[]> {
+  if (!db) {
+    return getDemoState()
+      .messages.filter(message => message.conversationId === conversationId)
       .sort((left, right) => left.createdAt.localeCompare(right.createdAt));
   }
 
-  const { data, error } = await client
+  const { data, error } = await db
     .from("messages")
-    .select(
-      MESSAGE_COLUMNS
-    )
+    .select(MESSAGE_COLUMNS)
     .eq("conversation_id", conversationId)
     .order("created_at", { ascending: true });
 
@@ -604,14 +656,14 @@ export async function getMessagesForConversation(conversationId: string): Promis
   return (data ?? []).map(toMessage);
 }
 
-export async function getNotesForConversation(conversationId: string): Promise<InternalNote[]> {
-  if (!client) {
-    return getDemoState().notes
-      .filter(note => note.conversationId === conversationId)
+export async function getNotesForConversation(db: Db, conversationId: string): Promise<InternalNote[]> {
+  if (!db) {
+    return getDemoState()
+      .notes.filter(note => note.conversationId === conversationId)
       .sort((left, right) => left.createdAt.localeCompare(right.createdAt));
   }
 
-  const { data, error } = await client
+  const { data, error } = await db
     .from("internal_notes")
     .select(NOTE_COLUMNS)
     .eq("conversation_id", conversationId)
@@ -624,8 +676,8 @@ export async function getNotesForConversation(conversationId: string): Promise<I
   return (data ?? []).map(toNote);
 }
 
-export async function upsertConversation(input: NewConversationInput): Promise<Conversation> {
-  if (!client) {
+export async function upsertConversation(db: Db, input: NewConversationInput): Promise<Conversation> {
+  if (!db) {
     const state = getDemoState();
     const existing = state.conversations.find(
       conversation =>
@@ -658,14 +710,14 @@ export async function upsertConversation(input: NewConversationInput): Promise<C
     return conversation;
   }
 
-  const channel = await findChannel(input.channelId);
-  const orgId = channel?.orgId ?? (await getActiveOrganizationId());
+  const channel = await findChannel(db, input.channelId);
+  if (!channel) {
+    throw new Error(`Channel ${input.channelId} not found`);
+  }
 
-  const existingResult = await client
+  const existingResult = await db
     .from("conversations")
-    .select(
-      CONVERSATION_COLUMNS
-    )
+    .select(CONVERSATION_COLUMNS)
     .eq("channel_id", input.channelId)
     .eq("external_contact_id", input.externalContactId)
     .maybeSingle<ConversationRow>();
@@ -683,7 +735,7 @@ export async function upsertConversation(input: NewConversationInput): Promise<C
       return toConversation(existingResult.data);
     }
 
-    const { data } = await client
+    const { data } = await db
       .from("conversations")
       .update(patch)
       .eq("id", existingResult.data.id)
@@ -693,19 +745,17 @@ export async function upsertConversation(input: NewConversationInput): Promise<C
     return toConversation(data ?? { ...existingResult.data, ...patch });
   }
 
-  const { data, error } = await client
+  const { data, error } = await db
     .from("conversations")
     .insert({
-      org_id: orgId,
+      org_id: channel.orgId,
       channel_id: input.channelId,
       external_contact_id: input.externalContactId,
       contact_name: input.contactName ?? input.externalContactId,
       contact_avatar_url: input.contactAvatarUrl ?? null,
       status: "open"
     })
-    .select(
-      CONVERSATION_COLUMNS
-    )
+    .select(CONVERSATION_COLUMNS)
     .single<ConversationRow>();
 
   if (error || !data) {
@@ -715,8 +765,8 @@ export async function upsertConversation(input: NewConversationInput): Promise<C
   return toConversation(data);
 }
 
-export async function insertMessage(input: NewMessageInput): Promise<Message> {
-  if (!client) {
+export async function insertMessage(db: Db, input: NewMessageInput): Promise<Message> {
+  if (!db) {
     const state = getDemoState();
     const message: Message = {
       id: randomUUID(),
@@ -746,7 +796,7 @@ export async function insertMessage(input: NewMessageInput): Promise<Message> {
     return message;
   }
 
-  const { data, error } = await client
+  const { data, error } = await db
     .from("messages")
     .insert({
       conversation_id: input.conversationId,
@@ -759,16 +809,14 @@ export async function insertMessage(input: NewMessageInput): Promise<Message> {
       platform_message_id: input.platformMessageId ?? null,
       status: input.status ?? "sent"
     })
-    .select(
-      MESSAGE_COLUMNS
-    )
+    .select(MESSAGE_COLUMNS)
     .single<MessageRow>();
 
   if (error || !data) {
     throw error ?? new Error("Unable to insert message");
   }
 
-  await client
+  await db
     .from("conversations")
     .update({
       last_message_at: data.created_at,
@@ -782,8 +830,13 @@ export async function insertMessage(input: NewMessageInput): Promise<Message> {
   return toMessage(data);
 }
 
-export async function addNote(conversationId: string, authorId: string, body: string): Promise<InternalNote> {
-  if (!client) {
+export async function addNote(
+  db: Db,
+  conversationId: string,
+  authorId: string,
+  body: string
+): Promise<InternalNote> {
+  if (!db) {
     const state = getDemoState();
     const note: InternalNote = {
       id: randomUUID(),
@@ -792,17 +845,13 @@ export async function addNote(conversationId: string, authorId: string, body: st
       body,
       createdAt: new Date().toISOString()
     };
-    state.notes.unshift(note);
+    state.notes.push(note);
     return note;
   }
 
-  const { data, error } = await client
+  const { data, error } = await db
     .from("internal_notes")
-    .insert({
-      conversation_id: conversationId,
-      author_id: authorId,
-      body
-    })
+    .insert({ conversation_id: conversationId, author_id: authorId, body })
     .select(NOTE_COLUMNS)
     .single<InternalNoteRow>();
 
@@ -814,10 +863,11 @@ export async function addNote(conversationId: string, authorId: string, body: st
 }
 
 export async function updateConversationStatus(
+  db: Db,
   conversationId: string,
   status: ConversationStatus
 ): Promise<Conversation | undefined> {
-  if (!client) {
+  if (!db) {
     const conversation = getDemoState().conversations.find(entry => entry.id === conversationId);
     if (conversation) {
       conversation.status = status;
@@ -825,13 +875,11 @@ export async function updateConversationStatus(
     return conversation;
   }
 
-  const { data, error } = await client
+  const { data, error } = await db
     .from("conversations")
     .update({ status })
     .eq("id", conversationId)
-    .select(
-      CONVERSATION_COLUMNS
-    )
+    .select(CONVERSATION_COLUMNS)
     .maybeSingle<ConversationRow>();
 
   if (error || !data) {
@@ -842,10 +890,11 @@ export async function updateConversationStatus(
 }
 
 export async function assignConversation(
+  db: Db,
   conversationId: string,
   assignedAgentId: string | null
 ): Promise<Conversation | undefined> {
-  if (!client) {
+  if (!db) {
     const conversation = getDemoState().conversations.find(entry => entry.id === conversationId);
     if (conversation) {
       conversation.assignedAgentId = assignedAgentId;
@@ -853,13 +902,11 @@ export async function assignConversation(
     return conversation;
   }
 
-  const { data, error } = await client
+  const { data, error } = await db
     .from("conversations")
     .update({ assigned_agent_id: assignedAgentId })
     .eq("id", conversationId)
-    .select(
-      CONVERSATION_COLUMNS
-    )
+    .select(CONVERSATION_COLUMNS)
     .maybeSingle<ConversationRow>();
 
   if (error || !data) {
@@ -869,8 +916,8 @@ export async function assignConversation(
   return toConversation(data);
 }
 
-export async function getConversationBundle(conversationId: string) {
-  if (!client) {
+export async function getConversationBundle(db: Db, orgId: string, conversationId: string) {
+  if (!db) {
     const state = getDemoState();
     const conversation = state.conversations.find(entry => entry.id === conversationId);
     if (!conversation) {
@@ -878,83 +925,75 @@ export async function getConversationBundle(conversationId: string) {
     }
 
     const channel = state.channels.find(entry => entry.id === conversation.channelId) ?? null;
-    const messages = state.messages
-      .filter(message => message.conversationId === conversationId)
-      .sort((left, right) => left.createdAt.localeCompare(right.createdAt));
-    const notes = state.notes
-      .filter(note => note.conversationId === conversationId)
-      .sort((left, right) => left.createdAt.localeCompare(right.createdAt));
 
     return clone({
       organization: state.organizations[0] ?? demoOrg,
       users: state.users,
       channel,
       conversation,
-      messages,
-      notes
+      messages: state.messages
+        .filter(message => message.conversationId === conversationId)
+        .sort((left, right) => left.createdAt.localeCompare(right.createdAt)),
+      notes: state.notes
+        .filter(note => note.conversationId === conversationId)
+        .sort((left, right) => left.createdAt.localeCompare(right.createdAt))
     });
   }
 
-  const conversation = await findConversation(conversationId);
-  if (!conversation) {
+  const conversation = await findConversation(db, conversationId);
+  // RLS already hides conversations outside the caller's org, but an explicit
+  // check keeps a mismatched id from ever resolving.
+  if (!conversation || conversation.orgId !== orgId) {
     return null;
   }
 
-  const [organizationRow, users, channel, messages, notes] = await Promise.all([
-    getActiveOrganizationRow(),
-    client
-      .from("org_users")
-      .select(ORG_USER_COLUMNS)
-      .eq("org_id", conversation.orgId)
-      .order("created_at", { ascending: true }),
-    findChannel(conversation.channelId),
-    getMessagesForConversation(conversationId),
-    getNotesForConversation(conversationId)
+  const [organization, users, channel, messages, notes] = await Promise.all([
+    findOrganization(db, orgId),
+    listOrgUsers(db, orgId),
+    findChannel(db, conversation.channelId),
+    getMessagesForConversation(db, conversationId),
+    getNotesForConversation(db, conversationId)
   ]);
 
-  if (!organizationRow || users.error) {
+  if (!organization) {
     return null;
   }
 
   return clone({
-    organization: toOrganization(organizationRow),
-    users: (users.data ?? []).map(toOrgUser),
-    channel,
+    organization,
+    users,
+    channel: channel ?? null,
     conversation,
     messages,
     notes
   });
 }
 
-export async function summarizeInbox() {
-  if (!client) {
+export async function summarizeInbox(db: Db, orgId: string) {
+  if (!db) {
     const state = getDemoState();
-    const openCount = state.conversations.filter(conversation => conversation.status === "open").length;
-    const pendingCount = state.conversations.filter(conversation => conversation.status === "pending").length;
-    const unreadCount = state.messages.filter(message => message.direction === "inbound").length;
-    const activeChannels = state.channels.filter(channel => channel.status === "active").length;
-
-    return { openCount, pendingCount, unreadCount, activeChannels };
+    return {
+      openCount: state.conversations.filter(conversation => conversation.status === "open").length,
+      pendingCount: state.conversations.filter(conversation => conversation.status === "pending").length,
+      unreadCount: state.messages.filter(message => message.direction === "inbound").length,
+      activeChannels: state.channels.filter(channel => channel.status === "active").length
+    };
   }
 
-  const orgId = await getActiveOrganizationId();
+  const conversationIds =
+    (await db.from("conversations").select("id").eq("org_id", orgId)).data?.map(entry => entry.id) ?? [];
+
   const [openResult, pendingResult, inboundResult, activeChannelsResult] = await Promise.all([
-    client.from("conversations").select("id", { count: "exact", head: true }).eq("org_id", orgId).eq("status", "open"),
-    client.from("conversations").select("id", { count: "exact", head: true }).eq("org_id", orgId).eq("status", "pending"),
-    client
-      .from("messages")
-      .select("id", { count: "exact", head: true })
-      .eq("direction", "inbound")
-      .in(
-        "conversation_id",
-        (
-          await client
-            .from("conversations")
-            .select("id")
-            .eq("org_id", orgId)
-        ).data?.map(entry => entry.id) ?? []
-      ),
-    client.from("channels").select("id", { count: "exact", head: true }).eq("org_id", orgId).eq("status", "active")
+    db.from("conversations").select("id", { count: "exact", head: true }).eq("org_id", orgId).eq("status", "open"),
+    db.from("conversations").select("id", { count: "exact", head: true }).eq("org_id", orgId).eq("status", "pending"),
+    conversationIds.length
+      ? db
+          .from("messages")
+          .select("id", { count: "exact", head: true })
+          .eq("direction", "inbound")
+          .in("conversation_id", conversationIds)
+      : Promise.resolve({ count: 0 } as const),
+    db.from("channels").select("id", { count: "exact", head: true }).eq("org_id", orgId).eq("status", "active")
   ]);
 
   return {

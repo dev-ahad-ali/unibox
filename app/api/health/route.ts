@@ -1,12 +1,13 @@
-import { isDemoMode } from "@/lib/env";
-import { getDemoSnapshot, summarizeInbox } from "@/lib/store";
+import { isSupabaseConfigured } from "@/lib/supabase";
 
+/**
+ * Liveness and configuration check. Deliberately returns no org or conversation
+ * data — this route is reachable without a session so that uptime probes work.
+ */
 export async function GET() {
-  const snapshot = await getDemoSnapshot();
   return Response.json({
     ok: true,
-    mode: isDemoMode() ? "demo" : "supabase",
-    org: snapshot.organization.name,
-    summary: await summarizeInbox()
+    mode: isSupabaseConfigured() ? "supabase" : "demo",
+    encryptionKeyConfigured: Boolean(process.env.APP_ENCRYPTION_KEY)
   });
 }

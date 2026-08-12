@@ -9,7 +9,8 @@ import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { StatusDot } from "@/components/ui/status-dot";
-import { getConversationBundle, getDemoSnapshot, summarizeInbox } from "@/lib/store";
+import { getConversationBundle, getSnapshot, summarizeInbox } from "@/lib/store";
+import { canReply, requireSession } from "@/lib/auth";
 import { formatDateTime, formatTime, initials } from "@/lib/format";
 import { isWithinServiceWindow, serviceWindowHoursLeft } from "@/lib/service-window";
 import { cn } from "@/lib/utils";
@@ -47,17 +48,23 @@ export default async function InboxPage({ searchParams }: InboxPageProps) {
   const status = getParamValue(params.status);
   const activeConversationId = getParamValue(params.conversation);
 
+  const session = await requireSession("/inbox");
+  const { db, member, organization } = session;
+
   const activePlatform = isPlatform(platform) ? platform : undefined;
-  const snapshot = await getDemoSnapshot(activePlatform);
-  const summary = await summarizeInbox();
+  const [snapshot, summary] = await Promise.all([
+    getSnapshot(db, member.orgId, activePlatform),
+    summarizeInbox(db, member.orgId)
+  ]);
 
   const visibleConversations = snapshot.conversations.filter(
     conversation => !status || conversation.status === status
   );
 
   const bundle =
-    (activeConversationId ? await getConversationBundle(activeConversationId) : null) ??
-    (await getConversationBundle(visibleConversations[0]?.id ?? ""));
+    (activeConversationId
+      ? await getConversationBundle(db, member.orgId, activeConversationId)
+      : null) ?? (await getConversationBundle(db, member.orgId, visibleConversations[0]?.id ?? ""));
 
   const selectedConversation = bundle?.conversation ?? null;
   const selectedChannel = bundle?.channel ?? null;
@@ -83,7 +90,13 @@ export default async function InboxPage({ searchParams }: InboxPageProps) {
       subtitle={`${summary.openCount} open · ${summary.pendingCount} pending · ${summary.activeChannels} channels connected`}
       active="/inbox"
       fullBleed
-      actions={<SocketStatus orgId={snapshot.organization.id} />}
+      viewer={{
+        displayName: member.displayName,
+        role: member.role,
+        organizationName: organization.name,
+        isDemo: session.isDemo
+      }}
+      actions={<SocketStatus orgId={member.orgId} />}
     >
       <div className="grid h-full min-h-0 grid-cols-1 lg:grid-cols-[300px_minmax(0,1fr)] xl:grid-cols-[300px_minmax(0,1fr)_280px]">
         {/* Conversation list */}
@@ -256,7 +269,7 @@ export default async function InboxPage({ searchParams }: InboxPageProps) {
               </div>
 
               <div className="shrink-0 border-t border-border p-3">
-                {isWhatsApp ? (
+                {isWhatsApp && canReply(member.role) ? (
                   <div
                     className={cn(
                       "mb-2 flex items-center gap-2 rounded-md border px-2.5 py-1.5 text-xs",
@@ -271,10 +284,16 @@ export default async function InboxPage({ searchParams }: InboxPageProps) {
                       : "WhatsApp service window closed — only an approved template can be sent until the customer replies."}
                   </div>
                 ) : null}
-                <Composer
-                  conversationId={selectedConversation.id}
-                  disabled={isWhatsApp && !windowOpen}
-                />
+                {canReply(member.role) ? (
+                  <Composer
+                    conversationId={selectedConversation.id}
+                    disabled={isWhatsApp && !windowOpen}
+                  />
+                ) : (
+                  <p className="text-xs text-muted-foreground">
+                    Your role is read-only, so replies are disabled.
+                  </p>
+                )}
               </div>
             </>
           ) : (
