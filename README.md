@@ -103,6 +103,50 @@ Important: `channels.access_token_encrypted` is sensitive. Do not fetch that col
 
 The app currently loads the first organization it finds. If your database is empty, insert at least one organization, one `org_users` row, and one channel row before testing the inbox.
 
+## Connecting channels
+
+`/admin/channels` (admins only) has two paths.
+
+### Connect with Meta
+
+One Facebook login covers Messenger, Instagram, and WhatsApp:
+
+1. `/admin/channels/connect/meta` sets a CSRF `state` cookie and redirects to the Facebook login dialog.
+2. The callback verifies `state` with a constant-time compare, exchanges the code for a user token, and **upgrades it to a long-lived token** — a short-lived one expires in about an hour and would take every stored Page token with it. The token is parked in an encrypted, httpOnly cookie (15 min TTL), so it never reaches the browser in readable form.
+3. The picker lists every Page, linked Instagram Business account, and WhatsApp phone number the login can manage. Assets are **re-fetched server-side on submit** rather than trusted from the form, so a client cannot post an account it was never authorized for.
+4. Each connected Page is subscribed to `messages`, `messaging_postbacks`, `message_deliveries`, and `message_reads`. Skipping this is the most common reason a "connected" Messenger channel never receives anything.
+
+Add this to **Valid OAuth Redirect URIs** in the Meta app dashboard first:
+
+```
+<NEXT_PUBLIC_APP_URL>/admin/channels/connect/meta/callback
+```
+
+Asset discovery is per-product and failure-tolerant: an app without WhatsApp permissions still lists and connects its Pages, and the reason the other product failed is shown as a warning.
+
+### Connect manually
+
+For LINE (which has no OAuth) and for Meta accounts where you would rather paste a System User token. The form relabels its fields per platform, because the id each one wants differs and getting it wrong is the usual setup mistake:
+
+| Platform | `external_account_id` |
+| --- | --- |
+| Messenger | Facebook Page id |
+| Instagram | Instagram Business account id (not the @handle) |
+| WhatsApp | Phone number id (not the phone number) |
+| LINE | Bot user id — the `userId` from `GET /v2/bot/info`, which arrives as `destination` on every webhook |
+
+**The token is verified against the live platform API before it is stored.** Saving an unusable credential would leave a channel that looks connected and silently drops every reply.
+
+### Managing a channel
+
+- **Test** re-verifies the stored credential and writes the result back to `status`, so the list reflects reality rather than a stale `active` from whenever it was first connected.
+- **Disconnect** sets `status = disconnected` and keeps all history.
+- **Delete** removes the row — and `conversations`/`messages` cascade from it, so the UI confirms first.
+
+Reconnecting an account that already exists updates the row in place instead of failing on the `(platform, external_account_id)` unique index, so an expired token can be swapped without losing conversations. Renaming a channel does not touch its stored token.
+
+Tokens are encrypted with AES-256-GCM under `APP_ENCRYPTION_KEY` before they reach Postgres, and the credential columns are revoked from the `authenticated` role — so channel writes that touch a token run on the service client, while renames, status changes, and deletes go through the user client where RLS re-checks the admin role.
+
 ## Webhook endpoints
 
 The scaffold includes these routes:
@@ -163,7 +207,8 @@ This scaffold does not yet implement the full auth flow. It is structured so aut
 ## Current limitations
 
 - Invites are not emailed — the admin copies the `/join/<token>` link manually.
-- Channel connection is manual: insert a `channels` row yourself. There is no OAuth connect flow.
+- WhatsApp channels connected through OAuth store the long-lived **user** token, which expires in about 60 days. Use a System User token via manual connect for a credential that does not rotate.
+- Meta permissions like `pages_messaging` need App Review before the connect flow works for accounts outside your app's development roles.
 - One workspace per account. Accepting an invite while already a member of another org is rejected rather than supported.
 - Assignment, internal notes, and channel setup render read-only; the CRUD actions are not wired.
 - WhatsApp sends text only. Template messages (needed outside the 24-hour window) and media sends are not implemented.
