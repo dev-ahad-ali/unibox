@@ -5,6 +5,11 @@ export function isPlatform(value: string | undefined): value is Platform {
   return Boolean(value && platforms.includes(value as Platform));
 }
 export type Role = "admin" | "agent" | "viewer";
+export const roles = ["admin", "agent", "viewer"] as const;
+
+export function isRole(value: string | undefined): value is Role {
+  return Boolean(value && roles.includes(value as Role));
+}
 export type ConversationStatus = "open" | "pending" | "closed";
 export type ChannelStatus = "active" | "disconnected" | "error";
 export type MessageDirection = "inbound" | "outbound";
