@@ -39,11 +39,13 @@ export async function middleware(request: NextRequest) {
     }
   });
 
-  // Refreshes an expiring session and writes the rotated cookies onto the
-  // response. Must run before any redirect so the refresh is not lost.
-  const {
-    data: { user }
-  } = await supabase.auth.getUser();
+  // Verifies the JWT locally against the project's JWKS (ES256), so a valid
+  // session costs no network round trip here. When the token is close to
+  // expiry, getClaims() refreshes the session first and the rotated cookies
+  // land on the response via the setAll handler above — which is why this must
+  // run before any redirect, so the refresh is not lost.
+  const { data } = await supabase.auth.getClaims();
+  const user = data?.claims?.sub;
 
   const { pathname, search } = request.nextUrl;
 

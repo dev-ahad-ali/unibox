@@ -1,6 +1,7 @@
+import { cache } from "react";
 import { redirect } from "next/navigation";
 import { demoOrg, demoUsers } from "@/lib/mock-data";
-import { findMembership, findOrganization } from "@/lib/store";
+import { findMembershipWithOrganization } from "@/lib/store";
 import { createUserClient, isSupabaseConfigured, type Db } from "@/lib/supabase";
 import type { Organization, OrgUser, Role } from "@/lib/types";
 
@@ -33,8 +34,12 @@ function demoSession(): Session {
 /**
  * Resolves the signed-in user and their org membership. Returns null when the
  * caller is not signed in, or is signed in but not yet a member of any org.
+ *
+ * Wrapped in React cache() so layouts, pages, and server actions rendering the
+ * same request share one resolution instead of re-running the auth check and
+ * membership query each.
  */
-export async function getSession(): Promise<Session | null> {
+export const getSession = cache(async (): Promise<Session | null> => {
   if (!isSupabaseConfigured()) {
     return demoSession();
   }
@@ -44,35 +49,31 @@ export async function getSession(): Promise<Session | null> {
     return null;
   }
 
-  // getUser() revalidates the JWT against Supabase. getSession() would just
-  // decode the cookie, which a client can forge.
-  const {
-    data: { user }
-  } = await db.auth.getUser();
+  // getClaims() verifies the JWT locally against the project's cached JWKS
+  // (the project signs with ES256), so the common case costs no network call.
+  // getSession() would just decode the cookie, which a client can forge;
+  // getUser() would round-trip to the Auth server on every render.
+  const { data } = await db.auth.getClaims();
+  const claims = data?.claims;
 
-  if (!user) {
+  if (!claims?.sub) {
     return null;
   }
 
-  const member = await findMembership(db, user.id);
-  if (!member) {
-    return null;
-  }
-
-  const organization = await findOrganization(db, member.orgId);
-  if (!organization) {
+  const membership = await findMembershipWithOrganization(db, claims.sub);
+  if (!membership) {
     return null;
   }
 
   return {
     db,
-    authUserId: user.id,
-    email: user.email ?? "",
-    member,
-    organization,
+    authUserId: claims.sub,
+    email: typeof claims.email === "string" ? claims.email : "",
+    member: membership.member,
+    organization: membership.organization,
     isDemo: false
   };
-}
+});
 
 /** Signed-in users only. Sends everyone else to the login page. */
 export async function requireSession(returnTo?: string): Promise<Session> {

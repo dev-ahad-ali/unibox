@@ -247,7 +247,7 @@ function toNote(row: InternalNoteRow): InternalNote {
 // Organizations and membership
 // ---------------------------------------------------------------------------
 
-export async function findOrganization(db: Db, orgId: string): Promise<Organization | undefined> {
+async function findOrganization(db: Db, orgId: string): Promise<Organization | undefined> {
   if (!db) {
     return getDemoState().organizations.find(entry => entry.id === orgId) ?? demoOrg;
   }
@@ -261,23 +261,33 @@ export async function findOrganization(db: Db, orgId: string): Promise<Organizat
   return data ? toOrganization(data) : undefined;
 }
 
-/** Resolves the caller's membership row from their Supabase Auth user id. */
-export async function findMembership(db: Db, authUserId: string): Promise<OrgUser | undefined> {
+/**
+ * Membership and organization in one round trip. The session needs both on
+ * every server render, and fetching them as two sequential queries doubled the
+ * navigation latency floor.
+ */
+export async function findMembershipWithOrganization(
+  db: Db,
+  authUserId: string
+): Promise<{ member: OrgUser; organization: Organization } | undefined> {
   if (!db) {
-    return getDemoState().users.find(user => user.authUserId === authUserId) ?? demoUsers[0];
+    const member = getDemoState().users.find(user => user.authUserId === authUserId) ?? demoUsers[0];
+    const organization =
+      getDemoState().organizations.find(entry => entry.id === member.orgId) ?? demoOrg;
+    return { member, organization };
   }
 
   const { data, error } = await db
     .from("org_users")
-    .select(ORG_USER_COLUMNS)
+    .select(`${ORG_USER_COLUMNS}, organizations (${ORGANIZATION_COLUMNS})`)
     .eq("auth_user_id", authUserId)
-    .maybeSingle<OrgUserRow>();
+    .maybeSingle<OrgUserRow & { organizations: OrganizationRow | null }>();
 
-  if (reportQueryError("org_users", error) || !data) {
+  if (reportQueryError("org_users", error) || !data?.organizations) {
     return undefined;
   }
 
-  return toOrgUser(data);
+  return { member: toOrgUser(data), organization: toOrganization(data.organizations) };
 }
 
 export async function listOrgUsers(db: Db, orgId: string): Promise<OrgUser[]> {
