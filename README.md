@@ -16,6 +16,7 @@ Built from the specification in [`docs/base.md`](docs/base.md).
 - [Database setup](#database-setup)
 - [Connecting channels](#connecting-channels)
 - [Receiving messages: webhooks](#receiving-messages-webhooks)
+- [Platform setup guides](#platform-setup-guides) — Messenger, WhatsApp, and LINE end to end
 - [Sending messages](#sending-messages)
 - [Security model](#security-model)
 - [Troubleshooting](#troubleshooting)
@@ -63,7 +64,7 @@ Navigation is filtered by role, so agents never see admin destinations at all.
 
 1. **Sign up** at `/signup` — this creates the workspace.
 2. **Connect a channel** at `/admin/channels`. See [Connecting channels](#connecting-channels). Nothing arrives in the inbox until at least one channel exists.
-3. **Point the platform's webhook** at your app. See [Receiving messages](#receiving-messages-webhooks). This is the step people forget — a connected channel with no webhook stays silent forever.
+3. **Point the platform's webhook** at your app. [Platform setup guides](#platform-setup-guides) walks through Messenger, WhatsApp, and LINE one click at a time. This is the step people forget — a connected channel with no webhook stays silent forever.
 4. **Send yourself a test message** from a real account on that platform. It should appear in `/inbox` within a second or two.
 5. **Invite your team** at `/admin/agents`.
 
@@ -277,7 +278,7 @@ Worth knowing if you are adapting `rls.sql`:
 
 ## Connecting channels
 
-`/admin/channels`, admins only. Two paths.
+`/admin/channels`, admins only. Two paths. This section covers what the two paths do; [Platform setup guides](#platform-setup-guides) covers what to click in each platform's dashboard first.
 
 ### Connect with Meta (recommended)
 
@@ -333,7 +334,7 @@ Reconnecting an account that already exists updates the row in place instead of 
 /api/webhooks/line
 ```
 
-Register `<NEXT_PUBLIC_APP_URL>/api/webhooks/<platform>` in each platform's dashboard. For Meta, also enter your `META_VERIFY_TOKEN` when prompted.
+Register `<NEXT_PUBLIC_APP_URL>/api/webhooks/<platform>` in each platform's dashboard. For Meta, also enter your `META_VERIFY_TOKEN` when prompted. [Platform setup guides](#platform-setup-guides) has the dashboard-by-dashboard version.
 
 ### Local development
 
@@ -360,14 +361,166 @@ Then set `NEXT_PUBLIC_APP_URL` to the tunnel URL, restart the dev server, and re
 
 Messenger and Instagram echo events (`message.is_echo`) are dropped: they are your own outbound replies coming back, and ingesting them would duplicate every agent reply as a customer message.
 
-### WhatsApp Cloud API quick start
+---
 
-1. In the Meta dashboard, add **WhatsApp** to your app and open **WhatsApp → API Setup**.
-2. Connect the number in Unibox (OAuth, or manually with the phone number id and token).
-3. Set the callback to `<NEXT_PUBLIC_APP_URL>/api/webhooks/whatsapp` with your verify token, and subscribe to the `messages` field.
-4. Add your own number as a test recipient, then message the test sender number.
+## Platform setup guides
 
-Tokens from API Setup are temporary and **expire after 24 hours**. Use a System User token (Business Settings → System Users) for anything longer than a test session.
+Each guide takes one platform from nothing to a message appearing in `/inbox`. They assume the app is already deployed and `NEXT_PUBLIC_APP_URL` points at it. Substitute your own URL wherever `<APP_URL>` appears.
+
+Every platform needs the same four things to line up. Most setup failures are one of them missing:
+
+1. An account the API is allowed to speak for. A Facebook Page, a WhatsApp Business number, a LINE Official Account. Personal accounts have no messaging API on any of these platforms.
+2. A webhook registered and **subscribed to the message events**, which is a separate click from registering the URL.
+3. The signing secret in the environment, because unsigned payloads are rejected outright.
+4. A channel row in `/admin/channels` whose account id matches what the platform puts in its webhook payload.
+
+### Messenger
+
+**What you need.** A Facebook Page (free, no verification) and a Meta app. Your own Facebook account is the app admin, so it can message the Page while the app is in development mode. Anyone else has to be added under **App roles → Roles** as a tester and accept the invite.
+
+**1. Set the environment variables.**
+
+```
+META_APP_ID=              # App settings → Basic
+META_APP_SECRET=          # App settings → Basic, click Show
+META_VERIFY_TOKEN=        # any string you invent
+NEXT_PUBLIC_APP_URL=https://<APP_URL>
+```
+
+Redeploy. `META_APP_SECRET` is not optional: without it `verifyMetaSignature` returns false and every webhook is answered with a 401 before it reaches the parser.
+
+**2. Whitelist the OAuth callback.** In the Meta dashboard, open **Facebook Login for Business → Settings** and add to **Valid OAuth Redirect URIs**:
+
+```
+https://<APP_URL>/admin/channels/connect/meta/callback
+```
+
+**3. Register the webhook.** Newer apps use the use-case layout, where this lives under **Use cases → Engage with customers on Messenger → Customize**. Older apps have **Products → Messenger → Settings**. Either way, find the Webhooks card:
+
+- Callback URL: `https://<APP_URL>/api/webhooks/messenger`
+- Verify token: your `META_VERIFY_TOKEN`
+- Verify and save. Meta sends a `GET` with `hub.challenge`, which the route echoes back.
+- Subscribe to the fields `messages`, `messaging_postbacks`, `message_deliveries`, `message_reads`.
+
+**4. Link the Page to the app.** On the same page, use **Generate access tokens** (or **Add or remove Pages**) and grant the permissions for your Page.
+
+**5. Connect it in Unibox.** Go to `/admin/channels` and press **Connect with Meta**. Pick the Page on the select screen and submit. The callback stores a long-lived Page token encrypted and calls `POST /{page-id}/subscribed_apps`, which is the step that makes Meta actually deliver messages to your endpoint. Doing this by hand and forgetting that call is the single most common reason a connected Page stays silent.
+
+To skip OAuth, paste a Page token into the manual form with the Page id as the account id. Then confirm the subscription yourself:
+
+```bash
+curl "https://graph.facebook.com/v26.0/<PAGE_ID>/subscribed_apps" \
+  -H "Authorization: Bearer <PAGE_TOKEN>"
+```
+
+**6. Test.** Open `/inbox`, then message the Page from `m.me/<page-username>` while signed in as the app admin. The message should land within a second or two. Reply from the composer and it arrives in your Messenger.
+
+| Error | Cause |
+| --- | --- |
+| Webhook verification fails in the dialog | Deploy not live, URL typo, or the verify token does not match `META_VERIFY_TOKEN` |
+| Verified, but nothing arrives | The Page is not subscribed. Reconnect via OAuth or POST `subscribed_apps` |
+| `401 Invalid webhook signature` in the logs | `META_APP_SECRET` wrong or unset |
+| Messages from a friend never arrive | They have no role on the app. Add them as a tester while it is in development mode |
+| `(#10) This message is sent outside of allowed window` | More than 24 hours since their last message |
+| `(#200)` permission error on send | The token is missing `pages_messaging`. Regenerate it |
+
+### WhatsApp
+
+**What you need.** The same Meta app. WhatsApp added as a product, which gives you a free test number and a test WhatsApp Business Account. No payment method and no business verification for testing.
+
+**1. Collect the values.** From **WhatsApp → API Setup** (or **Use cases → Connect with customers through WhatsApp → Customize → Test settings** in the newer layout):
+
+| Value on the page | Environment variable |
+| --- | --- |
+| Phone number ID, the numeric id under the test number | `WHATSAPP_PHONE_NUMBER_ID` |
+| Temporary access token | `WHATSAPP_ACCESS_TOKEN` |
+| WhatsApp Business Account ID | not stored, needed for the curl below |
+
+`META_APP_ID`, `META_APP_SECRET`, and `META_VERIFY_TOKEN` are shared with Messenger. `WHATSAPP_VERIFY_TOKEN` is optional and falls back to `META_VERIFY_TOKEN`.
+
+Temporary tokens **expire after 24 hours**. For anything longer, create a System User at **Business Settings → Users → System users**, assign it the app and the WhatsApp account, and generate a token with `whatsapp_business_messaging` and `whatsapp_business_management`. That token does not rotate.
+
+**2. Register the webhook.** Look for the Webhooks card under **WhatsApp → Configuration**, or **Use cases → Customize → Configuration**.
+
+- Callback URL: `https://<APP_URL>/api/webhooks/whatsapp`
+- Verify token: `META_VERIFY_TOKEN`
+- Subscribe to the `messages` field. This one field carries both inbound messages and delivery receipts.
+
+Meta's current dashboard sometimes puts the webhook form inside the **Production setup** wizard, which asks for a payment method before it will continue. The payment method is for registering a real business number, not for webhooks, and you can bypass the wizard entirely by subscribing over the API:
+
+```bash
+curl -X POST "https://graph.facebook.com/v26.0/<WABA_ID>/subscribed_apps" \
+  -H "Authorization: Bearer <ACCESS_TOKEN>" \
+  -d "override_callback_uri=https://<APP_URL>/api/webhooks/whatsapp" \
+  -d "verify_token=<META_VERIFY_TOKEN>"
+```
+
+A `{"success":true}` response means Meta has already called your verification endpoint and accepted it. Confirm with a `GET` on the same path, which lists the subscribed apps. If the call is refused for permissions, the temporary token lacks `whatsapp_business_management`; use a System User token.
+
+**3. Add test recipients.** Under **To → Manage phone number list**, add your own number. Meta sends it a code on WhatsApp. Up to five numbers, no review needed. Send the `hello_world` template to yourself from that page to open the conversation on your phone.
+
+**4. Connect it in Unibox.** On `/admin/channels`, use the manual form with platform WhatsApp, the phone number **id** as the account id, and the access token. The **Connect with Meta** button also works if your app has the WhatsApp permissions granted. The form verifies the credential against `GET /{phone-number-id}?fields=display_phone_number,verified_name` before storing it.
+
+**5. Test.** Reply to the template message from your phone. It should appear in `/inbox` under the WhatsApp filter, and the composer shows how much of the 24-hour window is left.
+
+| Error | Cause |
+| --- | --- |
+| `(#131030) Recipient phone number not in allowed list` | Test-number restriction. Add the recipient to the allow list, or register a real number. Inbound messages from anyone still arrive; only outbound is blocked |
+| `(#190)` or "Session has expired" | The 24-hour temporary token died. Generate a new one and reconnect the channel |
+| Logs show `POST → 200` but the inbox stays empty | No channel row whose account id matches the `phone_number_id` in the payload, or Supabase is not configured so the app is in demo mode |
+| Composer disabled with an amber warning | More than 24 hours since the customer wrote. Only a template would go through, and templates are not implemented |
+
+Replying inside the 24-hour window is free. Meta charges for business-initiated template messages, which is what the payment method in Production setup is for.
+
+### LINE
+
+**What you need.** A LINE Developers account, a provider, and a **Messaging API channel**. Creating the channel also creates the LINE Official Account behind it. All free, no review.
+
+**1. Create the channel.** At [developers.line.biz](https://developers.line.biz), create a provider, then a channel of type **Messaging API**.
+
+**2. Collect the values.**
+
+| Value | Where | Environment variable |
+| --- | --- | --- |
+| Channel secret | Basic settings tab | `LINE_CHANNEL_SECRET` |
+| Channel access token, long-lived | Messaging API tab, issue one if empty | `LINE_CHANNEL_ACCESS_TOKEN` |
+
+`LINE_CHANNEL_SECRET` signs `X-Line-Signature`. Without it the LINE webhook rejects everything, exactly like `META_APP_SECRET` on the Meta routes.
+
+**3. Register the webhook.** On the **Messaging API** tab, under Webhook settings:
+
+- Webhook URL: `https://<APP_URL>/api/webhooks/line`
+- Turn **Use webhook** on.
+- Press **Verify**. LINE has no `hub.challenge` handshake. It posts a signed payload with an empty `events` array, and the route answers `200 {"ok":true,"processed":0}`. A failure here is almost always a wrong or missing channel secret.
+
+**4. Turn off the auto-responder.** Still on the Messaging API tab, under **LINE Official Account features**, disable **Auto-reply messages** and **Greeting messages**. Left on, the official account answers your test messages before your app ever sees them.
+
+**5. Get the bot user id.** LINE routes webhooks by the bot's `userId`, delivered as `destination` on every event. It is not the `@handle`.
+
+```bash
+curl -H "Authorization: Bearer <CHANNEL_ACCESS_TOKEN>" https://api.line.me/v2/bot/info
+```
+
+**6. Connect it in Unibox.** LINE has no OAuth, so use the manual form: platform LINE, the `userId` from that response as the bot user id, and the channel access token.
+
+**7. Test.** Scan the QR code on the Messaging API tab to add the official account as a friend, then message it. It should appear under the LINE filter. Replies go out through the push message API.
+
+| Error | Cause |
+| --- | --- |
+| Verify button fails | `LINE_CHANNEL_SECRET` wrong or unset, or the app is not deployed yet |
+| Messages arrive but a canned reply beats you to it | Auto-reply or greeting messages still enabled |
+| Nothing arrives | **Use webhook** is off, or the channel row's bot user id does not match `destination` |
+| Send fails with 401 | The channel access token was reissued. Issuing a new one invalidates the old |
+
+The free LINE plan caps **push** messages at a few hundred per month. Replies sent within a minute of an inbound message use a reply token and do not count against that cap, but Unibox always sends via the push API, so heavy use will hit the limit.
+
+### A note on Instagram
+
+The connect flow targets **Instagram API with Facebook Login**: it discovers accounts through `me/accounts?fields=instagram_business_account`, authorizes with the linked Page's token, and calls `graph.facebook.com`. For that to work the Instagram account must be professional (Business or Creator) and linked to a Facebook Page you administer, and **Settings → Messages and story replies → Message controls → Connected tools → Allow access to messages** must be on in the Instagram app.
+
+Meta's newer **Instagram API with Instagram Login** product is a different integration. It issues `IGAA…` user tokens, calls `graph.instagram.com`, and uses the `instagram_business_*` permission names. Those tokens are rejected by this app with *Invalid OAuth access token - Cannot parse access token*, because they are being sent to the wrong host. If your dashboard is set up that way, either link the account to a Page and use the Page token, or adapt the adapter to `graph.instagram.com`.
+
+In development mode, both the professional account and any account you DM from must hold the **Instagram tester** role and have accepted the invite under **Settings → Website permissions → Tester invites**. Unlike Messenger, being the app admin on Facebook does not cover your Instagram account.
 
 ---
 
@@ -434,6 +587,7 @@ In a Supabase-configured deployment the handshake requires a valid access token.
 - **WhatsApp channels connected via OAuth store the long-lived user token**, which expires in ~60 days. A System User token via manual connect does not rotate.
 - **LINE verification uses a single `LINE_CHANNEL_SECRET`**, so one LINE channel per deployment. Meta platforms sign with one app secret and already support multiple accounts.
 - **One workspace per account.** Accepting an invite while already a member of another org is rejected rather than supported.
+- **Instagram works only through the Facebook Login flavour of the API.** Tokens from Meta's newer Instagram Login product target `graph.instagram.com` and are rejected. See [A note on Instagram](#a-note-on-instagram).
 - **Meta App Review** is required for `pages_messaging` and friends before the connect flow works for accounts outside your app's development roles.
 - **No audit log** on destructive admin actions.
 - **WeChat is out of scope** — see the note at the end of `docs/base.md`.
