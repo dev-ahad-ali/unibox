@@ -430,6 +430,45 @@ function getDemoSnapshotSync(platformFilter?: Platform): StoreSnapshot {
   });
 }
 
+/**
+ * What the inbox list actually needs: conversations, channels, and members —
+ * no message bodies. getSnapshot() pulls every message and note in the org,
+ * which is snapshot-export weight, not list weight; thread contents are
+ * fetched per conversation via getConversationBundle().
+ */
+export async function getInboxLists(
+  db: Db,
+  orgId: string
+): Promise<Pick<StoreSnapshot, "organization" | "users" | "channels" | "conversations">> {
+  if (!db) {
+    const { organization, users, channels, conversations } = getDemoSnapshotSync();
+    return { organization, users, channels, conversations };
+  }
+
+  const organization = await findOrganization(db, orgId);
+
+  const [channelsResult, conversationsResult, usersResult] = await Promise.all([
+    db.from("channels").select(CHANNEL_COLUMNS).eq("org_id", orgId).order("created_at", { ascending: false }),
+    db
+      .from("conversations")
+      .select(CONVERSATION_COLUMNS)
+      .eq("org_id", orgId)
+      .order("last_message_at", { ascending: false, nullsFirst: false }),
+    db.from("org_users").select(ORG_USER_COLUMNS).eq("org_id", orgId).order("created_at", { ascending: true })
+  ]);
+
+  reportQueryError("channels", channelsResult.error);
+  reportQueryError("conversations", conversationsResult.error);
+  reportQueryError("org_users", usersResult.error);
+
+  return clone({
+    organization: organization ?? { ...demoOrg, id: orgId, name: "Unknown organization" },
+    users: (usersResult.data ?? []).map(toOrgUser),
+    channels: (channelsResult.data ?? []).map(toChannel),
+    conversations: (conversationsResult.data ?? []).map(toConversation)
+  });
+}
+
 export async function getSnapshot(
   db: Db,
   orgId: string,

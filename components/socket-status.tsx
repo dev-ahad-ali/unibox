@@ -1,36 +1,17 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
-import { io, type Socket } from "socket.io-client";
+import { type Socket } from "socket.io-client";
 
-import { createBrowserSupabaseClient } from "@/lib/supabase-browser";
+import { getSocket } from "@/lib/socket-client";
 import { cn } from "@/lib/utils";
 
-let socket: Socket | null = null;
-
-async function getSocket() {
-  if (socket) {
-    return socket;
-  }
-
-  // The server derives the room from this token; it ignores any org id we send.
-  const supabase = createBrowserSupabaseClient();
-  const { data } = (await supabase?.auth.getSession()) ?? { data: { session: null } };
-
-  // Same-origin: the Socket.io server is attached to this app's HTTP server in
-  // server.js, so there is no cross-origin URL to configure.
-  socket = io({
-    path: "/socket.io",
-    transports: ["websocket", "polling"],
-    auth: { accessToken: data.session?.access_token }
-  });
-
-  return socket;
-}
-
+/**
+ * Connection pill only. Applying the events to the UI is the inbox client
+ * store's job — this component must not trigger router.refresh(), or every
+ * incoming message would force a full server re-render.
+ */
 export function SocketStatus({ orgId }: Readonly<{ orgId: string }>) {
-  const router = useRouter();
   const [state, setState] = useState<"connecting" | "live" | "offline">("connecting");
 
   useEffect(() => {
@@ -40,8 +21,6 @@ export function SocketStatus({ orgId }: Readonly<{ orgId: string }>) {
     const onConnect = () => setState("live");
     const onDisconnect = () => setState("offline");
     const onError = () => setState("offline");
-    // Server-rendered thread + list, so a refresh is the whole live update.
-    const onUpdate = () => router.refresh();
 
     void getSocket().then(instance => {
       if (cancelled) {
@@ -52,8 +31,6 @@ export function SocketStatus({ orgId }: Readonly<{ orgId: string }>) {
       client.on("connect", onConnect);
       client.on("disconnect", onDisconnect);
       client.on("connect_error", onError);
-      client.on("new_message", onUpdate);
-      client.on("conversation_updated", onUpdate);
 
       if (client.connected) {
         onConnect();
@@ -65,10 +42,8 @@ export function SocketStatus({ orgId }: Readonly<{ orgId: string }>) {
       client?.off("connect", onConnect);
       client?.off("disconnect", onDisconnect);
       client?.off("connect_error", onError);
-      client?.off("new_message", onUpdate);
-      client?.off("conversation_updated", onUpdate);
     };
-  }, [orgId, router]);
+  }, [orgId]);
 
   return (
     <span className="inline-flex items-center gap-1.5 rounded-md border border-border px-2 py-1 text-xs text-muted-foreground">

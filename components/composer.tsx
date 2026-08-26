@@ -1,17 +1,22 @@
 "use client";
 
 import { useState } from "react";
-import { useRouter } from "next/navigation";
 import { Send } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
+import type { Message } from "@/lib/types";
 
 export function Composer({
   conversationId,
-  disabled = false
-}: Readonly<{ conversationId: string; disabled?: boolean }>) {
-  const router = useRouter();
+  disabled = false,
+  onSent
+}: Readonly<{
+  conversationId: string;
+  disabled?: boolean;
+  /** Called with the stored message so the thread can append it in place. */
+  onSent?: (message: Message) => void;
+}>) {
   const [body, setBody] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [isPending, setIsPending] = useState(false);
@@ -30,7 +35,9 @@ export function Composer({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ conversationId, body })
       });
-      const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+      const payload = (await response.json().catch(() => null)) as
+        | { error?: string; message?: Message }
+        | null;
 
       if (!response.ok) {
         setError(payload?.error ?? "Unable to send message.");
@@ -38,8 +45,9 @@ export function Composer({
       }
 
       setBody("");
-      // The thread is server-rendered, so pull the new message back down.
-      router.refresh();
+      if (payload?.message) {
+        onSent?.(payload.message);
+      }
     } catch {
       setError("Network error — the message was not sent.");
     } finally {

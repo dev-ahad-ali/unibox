@@ -75,6 +75,18 @@ export const getSession = cache(async (): Promise<Session | null> => {
   };
 });
 
+/**
+ * Session gate for API routes. Returns the session, or the 401 response the
+ * route should send — API callers need JSON, not a redirect to an HTML page.
+ */
+export async function requireApiSession(): Promise<Session | Response> {
+  const session = await getSession();
+  if (!session) {
+    return Response.json({ error: "Not signed in" }, { status: 401 });
+  }
+  return session;
+}
+
 /** Signed-in users only. Sends everyone else to the login page. */
 export async function requireSession(returnTo?: string): Promise<Session> {
   const session = await getSession();

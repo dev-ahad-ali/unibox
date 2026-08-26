@@ -105,6 +105,17 @@ export async function processWebhook(platform: Platform, request: Request) {
 
   for (const receipt of statuses) {
     await updateMessageStatus(db, receipt.platformMessageId, receipt.status);
+
+    // Delivery/read ticks used to reach the browser only as a side effect of
+    // the next full refresh. The client store patches them in place instead.
+    const channel = await resolveChannel(receipt.accountId);
+    if (channel) {
+      emitOrgEvent(channel.orgId, "message_status", {
+        platform,
+        platformMessageId: receipt.platformMessageId,
+        status: receipt.status
+      });
+    }
   }
 
   for (const orgId of orgIds) {
