@@ -1,4 +1,4 @@
-import { Camera, MessageCircle, MessageSquare, Phone } from "lucide-react";
+import { Camera, MessageCircle, MessageSquare, Phone, Send } from "lucide-react";
 
 import { cn } from "@/lib/utils";
 import type { Platform } from "@/lib/types";
@@ -9,7 +9,8 @@ const PLATFORM_META = {
   messenger: { label: "Messenger", Icon: MessageSquare },
   instagram: { label: "Instagram", Icon: Camera },
   whatsapp: { label: "WhatsApp", Icon: Phone },
-  line: { label: "LINE", Icon: MessageCircle }
+  line: { label: "LINE", Icon: MessageCircle },
+  telegram: { label: "Telegram", Icon: Send }
 } as const satisfies Record<Platform, { label: string; Icon: typeof MessageSquare }>;
 
 export function platformLabel(platform?: Platform) {

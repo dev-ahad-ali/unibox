@@ -36,15 +36,12 @@ function toDate(value: unknown) {
 }
 
 function accessToken(channel: AuthorizedChannel, platform: "messenger" | "instagram") {
-  const fallback =
-    platform === "instagram"
-      ? process.env.INSTAGRAM_PAGE_ACCESS_TOKEN || process.env.META_PAGE_ACCESS_TOKEN
-      : process.env.META_PAGE_ACCESS_TOKEN;
-
-  const token = channel.credentials.accessToken || fallback;
+  // Per-channel only: env-var token fallbacks made one tenant's credential a
+  // silent default for every other tenant's channel.
+  const token = channel.credentials.accessToken;
   if (!token) {
     throw new Error(
-      `No access token for ${platform} channel "${channel.displayName}". Store one in channels.access_token_encrypted or set META_PAGE_ACCESS_TOKEN.`
+      `No access token stored for ${platform} channel "${channel.displayName}". Reconnect it from /admin/channels.`
     );
   }
 

@@ -2,6 +2,7 @@ import { getAdapter } from "@/lib/adapters";
 import {
   authorizeChannel,
   findChannelForEvent,
+  getWebhookSecretForEvent,
   insertMessage,
   messageExists,
   updateMessageStatus,
@@ -19,15 +20,29 @@ export async function processWebhook(platform: Platform, request: Request) {
   // above U+00FF — every Japanese or emoji message failed before verification.
   const rawBody = await request.text();
 
-  if (!adapter.verifyWebhook({ request, rawBody })) {
-    return Response.json({ error: "Invalid webhook signature" }, { status: 401 });
-  }
-
   let payload: unknown = {};
   try {
     payload = rawBody ? JSON.parse(rawBody) : {};
   } catch {
     return Response.json({ error: "Malformed webhook payload" }, { status: 400 });
+  }
+
+  // Platforms that authenticate with a per-channel secret (LINE, Telegram)
+  // name the addressed account in the payload or URL, so the secret can be
+  // looked up before verification. Parsing untrusted JSON first is fine —
+  // nothing is ingested until the signature check below passes.
+  let channelSecret: string | null = null;
+  if (adapter.webhookAccountId) {
+    const secretDb: Db = isSupabaseConfigured() ? createServiceClient() : null;
+    channelSecret = await getWebhookSecretForEvent(
+      secretDb,
+      platform,
+      adapter.webhookAccountId(payload, request)
+    );
+  }
+
+  if (!(await adapter.verifyWebhook({ request, rawBody, secret: channelSecret }))) {
+    return Response.json({ error: "Invalid webhook signature" }, { status: 401 });
   }
 
   // Inbound messages have no signed-in user behind them, and the platform

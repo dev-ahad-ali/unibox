@@ -98,17 +98,17 @@ function toMessageStatus(status: string | undefined): MessageStatus | null {
 }
 
 function accessToken(channel: AuthorizedChannel) {
-  const token = channel.credentials.accessToken || process.env.WHATSAPP_ACCESS_TOKEN;
+  const token = channel.credentials.accessToken;
   if (!token) {
     throw new Error(
-      `No access token for WhatsApp channel "${channel.displayName}". Store one in channels.access_token_encrypted or set WHATSAPP_ACCESS_TOKEN.`
+      `No access token stored for WhatsApp channel "${channel.displayName}". Reconnect it from /admin/channels.`
     );
   }
   return token;
 }
 
 function phoneNumberId(channel: AuthorizedChannel) {
-  const id = channel.externalAccountId || process.env.WHATSAPP_PHONE_NUMBER_ID;
+  const id = channel.externalAccountId;
   if (!id) {
     throw new Error("WhatsApp requires a phone number id (channels.external_account_id).");
   }

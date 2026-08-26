@@ -1,5 +1,5 @@
-export type Platform = "messenger" | "instagram" | "whatsapp" | "line";
-export const platforms = ["messenger", "instagram", "whatsapp", "line"] as const;
+export type Platform = "messenger" | "instagram" | "whatsapp" | "line" | "telegram";
+export const platforms = ["messenger", "instagram", "whatsapp", "line", "telegram"] as const;
 
 export function isPlatform(value: string | undefined): value is Platform {
   return Boolean(value && platforms.includes(value as Platform));
@@ -132,10 +132,22 @@ export interface OutboundMessage {
 export interface WebhookContext {
   request: Request;
   rawBody: string;
+  /**
+   * The matched channel's decrypted webhook secret, when the adapter routes
+   * by per-channel secrets (LINE, Telegram). Meta platforms sign with the
+   * operator app secret instead and ignore this.
+   */
+  secret?: string | null;
 }
 
 export interface ChannelAdapter {
   verifyWebhook(context: WebhookContext): Promise<boolean> | boolean;
+  /**
+   * Extracts the platform account id this webhook is addressed to, so the
+   * per-channel secret can be looked up before verification. Adapters that
+   * verify with an app-level secret omit this.
+   */
+  webhookAccountId?(payload: unknown, request: Request): string | undefined;
   parseIncoming(payload: unknown): ParsedWebhook;
   sendMessage(
     channel: AuthorizedChannel,

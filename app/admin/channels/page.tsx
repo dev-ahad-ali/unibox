@@ -15,7 +15,8 @@ const WEBHOOK_PATH = {
   messenger: "/api/webhooks/messenger",
   instagram: "/api/webhooks/instagram",
   whatsapp: "/api/webhooks/whatsapp",
-  line: "/api/webhooks/line"
+  line: "/api/webhooks/line",
+  telegram: "/api/webhooks/telegram"
 } as const;
 
 function getParam(value?: string | string[]) {

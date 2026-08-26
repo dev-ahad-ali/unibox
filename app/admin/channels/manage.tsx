@@ -46,6 +46,12 @@ const FIELD_HELP: Record<Platform, { idLabel: string; idHint: string; tokenLabel
     idHint: "The `userId` from GET https://api.line.me/v2/bot/info — arrives as `destination` on webhooks.",
     tokenLabel: "Channel access token",
     tokenHint: "LINE Developers console → Messaging API tab."
+  },
+  telegram: {
+    idLabel: "Bot id",
+    idHint: "The number before the colon in the bot token @BotFather gave you.",
+    tokenLabel: "Bot token",
+    tokenHint: "From @BotFather. The webhook is registered for you on connect."
   }
 };
 
@@ -89,8 +95,9 @@ export function ManualConnectForm() {
       <CardHeader>
         <CardTitle>Connect manually</CardTitle>
         <CardDescription>
-          For LINE, and for Meta accounts you would rather paste a System User token for. The token
-          is verified against the platform before it is saved, then encrypted at rest.
+          For LINE and Telegram, and for Meta accounts you would rather paste a System User token
+          for. The token is verified against the platform before it is saved, then encrypted at
+          rest. Telegram's webhook is registered automatically on connect.
         </CardDescription>
       </CardHeader>
       <CardContent>
@@ -133,6 +140,16 @@ export function ManualConnectForm() {
             <Input name="accessToken" type="password" required autoComplete="off" />
             <span className="text-[11px] text-muted-foreground">{help.tokenHint}</span>
           </label>
+
+          {platform === "line" ? (
+            <label className="flex flex-col gap-1.5">
+              <span className="text-xs text-muted-foreground">Channel secret</span>
+              <Input name="webhookSecret" type="password" autoComplete="off" />
+              <span className="text-[11px] text-muted-foreground">
+                Basic settings tab. Verifies inbound webhooks for this channel; stored encrypted.
+              </span>
+            </label>
+          ) : null}
 
           {state.error ? <p className="text-xs text-destructive">{state.error}</p> : null}
           {state.notice ? <p className="text-xs text-primary">{state.notice}</p> : null}

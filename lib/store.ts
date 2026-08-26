@@ -592,6 +592,52 @@ export async function findChannelForEvent(
   return data ? toChannel(data) : undefined;
 }
 
+/**
+ * The decrypted webhook secret for the channel an inbound event addresses.
+ * Same matching rule as findChannelForEvent: exact account id first, newest
+ * channel of the platform as the single-account fallback. Service client
+ * only — webhook_secret is revoked from the authenticated role.
+ */
+export async function getWebhookSecretForEvent(
+  db: Db,
+  platform: Platform,
+  accountId?: string
+): Promise<string | null> {
+  if (!db) {
+    return null;
+  }
+
+  if (accountId) {
+    const { data } = await db
+      .from("channels")
+      .select("webhook_secret")
+      .eq("platform", platform)
+      .eq("external_account_id", accountId)
+      .limit(1)
+      .maybeSingle<{ webhook_secret: string | null }>();
+
+    if (data?.webhook_secret) {
+      return decryptSecret(data.webhook_secret) ?? data.webhook_secret;
+    }
+  }
+
+  const { data } = await db
+    .from("channels")
+    .select("webhook_secret")
+    .eq("platform", platform)
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle<{ webhook_secret: string | null }>();
+
+  if (!data?.webhook_secret) {
+    return null;
+  }
+
+  // Seeded rows may hold a plaintext secret; decryptSecret returns null for
+  // anything not in our envelope format.
+  return decryptSecret(data.webhook_secret) ?? data.webhook_secret;
+}
+
 export type ChannelInput = {
   orgId: string;
   platform: Platform;
@@ -599,6 +645,8 @@ export type ChannelInput = {
   externalAccountId: string;
   /** Plaintext — encrypted here before it touches Postgres. */
   accessToken?: string;
+  /** Plaintext — encrypted here. Verifies inbound webhooks for LINE/Telegram. */
+  webhookSecret?: string;
   connectedBy?: string | null;
   status?: Channel["status"];
 };
@@ -656,6 +704,10 @@ export async function upsertChannel(db: Db, input: ChannelInput): Promise<Channe
   // channel does not wipe its credentials.
   if (input.accessToken) {
     row.access_token_encrypted = encryptSecret(input.accessToken);
+  }
+
+  if (input.webhookSecret) {
+    row.webhook_secret = encryptSecret(input.webhookSecret);
   }
 
   const existing = await db

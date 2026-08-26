@@ -36,10 +36,10 @@ function messageBody(message: LineEvent["message"]) {
 }
 
 function accessToken(channel: AuthorizedChannel) {
-  const token = channel.credentials.accessToken || process.env.LINE_CHANNEL_ACCESS_TOKEN;
+  const token = channel.credentials.accessToken;
   if (!token) {
     throw new Error(
-      `No access token for LINE channel "${channel.displayName}". Store one in channels.access_token_encrypted or set LINE_CHANNEL_ACCESS_TOKEN.`
+      `No access token stored for LINE channel "${channel.displayName}". Reconnect it from /admin/channels.`
     );
   }
   return token;
@@ -65,11 +65,12 @@ async function lineRequest<T>(path: string, init: { method: "GET" | "POST"; acce
 }
 
 export const lineAdapter: ChannelAdapter = {
-  verifyWebhook({ request, rawBody }) {
-    const secret = process.env.LINE_CHANNEL_SECRET;
-    // Without a channel secret we cannot tell a real LINE callback from a
-    // forged one, so we reject rather than trust the payload.
-    if (!secret) {
+  verifyWebhook({ request, rawBody, secret }) {
+    // Per-channel secret first — one deployment, many LINE accounts. The env
+    // var remains as a single-account fallback. Without either we cannot tell
+    // a real LINE callback from a forged one, so we reject.
+    const channelSecret = secret || process.env.LINE_CHANNEL_SECRET;
+    if (!channelSecret) {
       return false;
     }
 
@@ -78,7 +79,13 @@ export const lineAdapter: ChannelAdapter = {
       return false;
     }
 
-    return safeEqual(hmacSha256Base64(secret, rawBody), signature);
+    return safeEqual(hmacSha256Base64(channelSecret, rawBody), signature);
+  },
+  // `destination` is outside any signature, but it is only used to pick which
+  // channel's secret to verify against — a forged destination still fails the
+  // signature check for that channel.
+  webhookAccountId(payload: any) {
+    return typeof payload?.destination === "string" ? payload.destination : undefined;
   },
   parseIncoming(payload: any): ParsedWebhook {
     const events: LineEvent[] = Array.isArray(payload?.events) ? payload.events : [];

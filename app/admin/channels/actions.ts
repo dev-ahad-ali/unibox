@@ -1,8 +1,11 @@
 "use server";
 
+import { randomBytes } from "node:crypto";
 import { revalidatePath } from "next/cache";
 import { getAdapter } from "@/lib/adapters";
 import { subscribePageWebhook } from "@/lib/adapters/meta-connect";
+import { registerTelegramWebhook } from "@/lib/adapters/telegram";
+import { appUrl } from "@/lib/app-url";
 import { requireRole } from "@/lib/auth";
 import { isEncryptionConfigured } from "@/lib/crypto";
 import {
@@ -22,7 +25,8 @@ const ACCOUNT_ID_LABEL: Record<Platform, string> = {
   messenger: "Facebook Page id",
   instagram: "Instagram account id",
   whatsapp: "WhatsApp phone number id",
-  line: "LINE bot user id"
+  line: "LINE bot user id",
+  telegram: "Telegram bot id"
 };
 
 export async function connectChannel(
@@ -42,6 +46,7 @@ export async function connectChannel(
   const displayName = String(formData.get("displayName") ?? "").trim();
   const externalAccountId = String(formData.get("externalAccountId") ?? "").trim();
   const accessToken = String(formData.get("accessToken") ?? "").trim();
+  const webhookSecret = String(formData.get("webhookSecret") ?? "").trim();
 
   if (!isPlatform(platform)) {
     return { error: "Pick a platform." };
@@ -84,6 +89,11 @@ export async function connectChannel(
     };
   }
 
+  // Telegram authenticates webhooks with a secret_token we choose. Generate
+  // one per channel; it is stored encrypted and registered with the bot below.
+  const generatedSecret =
+    platform === "telegram" && !webhookSecret ? randomBytes(24).toString("hex") : undefined;
+
   try {
     await upsertChannel(service, {
       orgId: session.member.orgId,
@@ -91,6 +101,7 @@ export async function connectChannel(
       displayName: displayName || label,
       externalAccountId,
       accessToken,
+      webhookSecret: webhookSecret || generatedSecret,
       connectedBy: session.member.id,
       status: "active"
     });
@@ -98,8 +109,26 @@ export async function connectChannel(
     return { error: error instanceof Error ? error.message : "Could not save the channel." };
   }
 
-  // Messenger and Instagram need an explicit webhook subscription on the Page.
   let notice = `Connected ${label}.`;
+
+  // Telegram webhooks are registered per bot, so connecting can do the whole
+  // setup: the admin pastes a token and messages start flowing.
+  if (platform === "telegram") {
+    try {
+      await registerTelegramWebhook(
+        accessToken,
+        appUrl(`/api/webhooks/telegram?account=${encodeURIComponent(externalAccountId)}`),
+        webhookSecret || generatedSecret || ""
+      );
+      notice += " Webhook registered with Telegram.";
+    } catch (error) {
+      notice += ` Saved, but registering the webhook failed: ${
+        error instanceof Error ? error.message : "unknown error"
+      }`;
+    }
+  }
+
+  // Messenger and Instagram need an explicit webhook subscription on the Page.
   if (platform === "messenger") {
     try {
       await subscribePageWebhook(externalAccountId, accessToken);

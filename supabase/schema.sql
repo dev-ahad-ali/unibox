@@ -18,7 +18,7 @@ create table if not exists org_users (
 create table if not exists channels (
   id uuid primary key default gen_random_uuid(),
   org_id uuid references organizations(id) on delete cascade,
-  platform text not null check (platform in ('messenger', 'instagram', 'whatsapp', 'line')),
+  platform text not null check (platform in ('messenger', 'instagram', 'whatsapp', 'line', 'telegram')),
   display_name text,
   external_account_id text not null,
   access_token_encrypted text not null,
@@ -102,3 +102,10 @@ create index if not exists idx_conversations_org on conversations(org_id);
 create index if not exists idx_conversations_channel_contact on conversations(channel_id, external_contact_id);
 create index if not exists idx_messages_conversation on messages(conversation_id, created_at);
 create index if not exists idx_notes_conversation on internal_notes(conversation_id, created_at);
+
+-- `create table if not exists` never updates an existing table, so the platform
+-- list is re-asserted here for deployments created before Telegram support.
+-- Idempotent: drops and recreates the same constraint.
+alter table channels drop constraint if exists channels_platform_check;
+alter table channels add constraint channels_platform_check
+  check (platform in ('messenger', 'instagram', 'whatsapp', 'line', 'telegram'));

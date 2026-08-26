@@ -158,6 +158,23 @@ describe("line signature verification", () => {
     expect(adapter.verifyWebhook(lineSignedContext(body, LINE_CHANNEL_SECRET))).toBe(false);
   });
 
+  it("prefers the per-channel secret over the env fallback", () => {
+    const perChannel = "channel-specific-secret";
+    const signedForChannel = { ...lineSignedContext(body, perChannel), secret: perChannel };
+    expect(adapter.verifyWebhook(signedForChannel)).toBe(true);
+
+    // Signed with the env secret but a different per-channel secret provided:
+    // the channel's own secret must win, so verification fails.
+    const signedForEnv = { ...lineSignedContext(body, LINE_CHANNEL_SECRET), secret: perChannel };
+    expect(adapter.verifyWebhook(signedForEnv)).toBe(false);
+  });
+
+  it("extracts the destination as the routing account id", () => {
+    expect(adapter.webhookAccountId?.(linePayload, lineSignedContext(body, "x").request)).toBe(
+      "U67890abcdef1234567890abcdef1234"
+    );
+  });
+
   it("accepts the Verify-button probe (signed, empty events)", () => {
     const probe = JSON.stringify(lineVerifyPayload);
     expect(adapter.verifyWebhook(lineSignedContext(probe, LINE_CHANNEL_SECRET))).toBe(true);
