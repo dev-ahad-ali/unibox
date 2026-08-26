@@ -305,3 +305,21 @@ on org_invites
 for delete
 to authenticated
 using (current_org_role() = 'admin' and org_id = current_org_id());
+
+-- ---------------------------------------------------------------------------
+-- webhook_events
+-- ---------------------------------------------------------------------------
+alter table webhook_events enable row level security;
+
+-- Only the service role writes these (webhook ingestion has no signed-in
+-- user); org members may read their own org's rows for the channel health UI.
+revoke all on webhook_events from anon, authenticated;
+grant select (id, platform, external_account_id, channel_id, org_id, outcome, message_count, received_at)
+  on webhook_events to authenticated;
+
+drop policy if exists "org members can read webhook events" on webhook_events;
+create policy "org members can read webhook events"
+on webhook_events
+for select
+to authenticated
+using (org_id = current_org_id());

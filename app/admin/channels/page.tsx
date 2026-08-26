@@ -7,7 +7,8 @@ import { StatusDot } from "@/components/ui/status-dot";
 import { metaConfigured, metaRedirectUri } from "@/lib/adapters/meta-connect";
 import { requireRole } from "@/lib/auth";
 import { isEncryptionConfigured } from "@/lib/crypto";
-import { getSnapshot } from "@/lib/store";
+import { getChannelHealth, getInboxLists } from "@/lib/store";
+import { LiveSetupRefresh } from "./live-refresh";
 import { formatDateTime } from "@/lib/format";
 import { platforms } from "@/lib/types";
 
@@ -33,8 +34,14 @@ export default async function ChannelsPage({
   const errorMessage = getParam(params.error);
   const connectedMessage = getParam(params.connected);
 
-  const snapshot = await getSnapshot(db, member.orgId);
+  const [snapshot, health] = await Promise.all([
+    getInboxLists(db, member.orgId),
+    getChannelHealth(db, member.orgId)
+  ]);
   const connected = new Set(snapshot.channels.map(channel => channel.platform));
+  const channelsWithMessages = new Set(
+    snapshot.conversations.filter(entry => entry.lastInboundAt).map(entry => entry.channelId)
+  );
 
   return (
     <AppShell
@@ -49,6 +56,7 @@ export default async function ChannelsPage({
       }}
     >
       <div className="flex max-w-3xl flex-col gap-6">
+        <LiveSetupRefresh />
         {connectedMessage ? (
           <p className="rounded-md border border-success/30 bg-success/10 px-3 py-2 text-xs text-success">
             Connected {connectedMessage}.
@@ -141,6 +149,29 @@ export default async function ChannelsPage({
                     </div>
                   </dl>
 
+                  <SetupChecklist
+                    steps={[
+                      {
+                        label: "Credentials verified",
+                        done: channel.status === "active",
+                        hint: "Press Test to re-verify the stored token."
+                      },
+                      {
+                        label: "Webhook receiving",
+                        done: Boolean(health[channel.id]),
+                        hint:
+                          health[channel.id] === undefined
+                            ? `Register ${WEBHOOK_PATH[channel.platform]} in the platform dashboard, then send a test event.`
+                            : `Last event ${formatDateTime(health[channel.id].lastReceivedAt)} (${health[channel.id].lastOutcome}).`
+                      },
+                      {
+                        label: "First message ingested",
+                        done: channelsWithMessages.has(channel.id),
+                        hint: "Message this account from a real device — it should appear in the inbox within seconds."
+                      }
+                    ]}
+                  />
+
                   <ChannelControls channelId={channel.id} displayName={channel.displayName} />
                 </CardContent>
               </Card>
@@ -171,6 +202,35 @@ export default async function ChannelsPage({
         </div>
       </div>
     </AppShell>
+  );
+}
+
+function SetupChecklist({
+  steps
+}: Readonly<{ steps: Array<{ label: string; done: boolean; hint: string }> }>) {
+  return (
+    <div className="flex flex-col gap-1.5 rounded-md border border-border/60 p-2.5">
+      {steps.map(step => (
+        <div key={step.label} className="flex items-start gap-2 text-xs">
+          <span
+            className={
+              step.done
+                ? "mt-0.5 size-3.5 shrink-0 rounded-full bg-success/20 text-center text-[9px] leading-[14px] text-success"
+                : "mt-0.5 size-3.5 shrink-0 rounded-full border border-border text-center text-[9px] leading-[13px] text-muted-foreground"
+            }
+            aria-hidden
+          >
+            {step.done ? "✓" : ""}
+          </span>
+          <span className={step.done ? "" : "text-muted-foreground"}>
+            {step.label}
+            {!step.done || step.label === "Webhook receiving" ? (
+              <span className="block text-[11px] text-muted-foreground">{step.hint}</span>
+            ) : null}
+          </span>
+        </div>
+      ))}
+    </div>
   );
 }
 

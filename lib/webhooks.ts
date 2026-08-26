@@ -4,6 +4,7 @@ import {
   findChannelForEvent,
   getWebhookSecretForEvent,
   insertMessage,
+  logWebhookEvent,
   messageExists,
   updateMessageStatus,
   upsertConversation
@@ -20,10 +21,13 @@ export async function processWebhook(platform: Platform, request: Request) {
   // above U+00FF — every Japanese or emoji message failed before verification.
   const rawBody = await request.text();
 
+  const logDb: Db = isSupabaseConfigured() ? createServiceClient() : null;
+
   let payload: unknown = {};
   try {
     payload = rawBody ? JSON.parse(rawBody) : {};
   } catch {
+    void logWebhookEvent(logDb, { platform, outcome: "malformed" });
     return Response.json({ error: "Malformed webhook payload" }, { status: 400 });
   }
 
@@ -31,17 +35,18 @@ export async function processWebhook(platform: Platform, request: Request) {
   // name the addressed account in the payload or URL, so the secret can be
   // looked up before verification. Parsing untrusted JSON first is fine —
   // nothing is ingested until the signature check below passes.
+  const accountHint = adapter.webhookAccountId?.(payload, request);
   let channelSecret: string | null = null;
   if (adapter.webhookAccountId) {
-    const secretDb: Db = isSupabaseConfigured() ? createServiceClient() : null;
-    channelSecret = await getWebhookSecretForEvent(
-      secretDb,
-      platform,
-      adapter.webhookAccountId(payload, request)
-    );
+    channelSecret = await getWebhookSecretForEvent(logDb, platform, accountHint);
   }
 
   if (!(await adapter.verifyWebhook({ request, rawBody, secret: channelSecret }))) {
+    void logWebhookEvent(logDb, {
+      platform,
+      externalAccountId: accountHint,
+      outcome: "invalid_signature"
+    });
     return Response.json({ error: "Invalid webhook signature" }, { status: 401 });
   }
 
@@ -135,6 +140,34 @@ export async function processWebhook(platform: Platform, request: Request) {
 
   for (const orgId of orgIds) {
     emitOrgEvent(orgId, "webhook_received", { platform, count: ingested });
+  }
+
+  // The delivery log is what the channels screen's health line reads. An empty
+  // signed call (LINE's Verify button, a status-only delivery) still resolves
+  // the addressed channel so setup checks can go green before the first
+  // customer message.
+  const loggedChannel =
+    (await resolveChannel(messages[0]?.accountId ?? statuses[0]?.accountId ?? accountHint)) ?? undefined;
+  void logWebhookEvent(logDb, {
+    platform,
+    externalAccountId: accountHint ?? messages[0]?.accountId,
+    channelId: loggedChannel?.id,
+    orgId: loggedChannel?.orgId,
+    outcome:
+      ingested > 0
+        ? "ingested"
+        : duplicates > 0
+          ? "duplicate"
+          : messages.length > 0
+            ? "unmatched"
+            : "empty",
+    messageCount: ingested
+  });
+
+  // A message-less but signed call (LINE's Verify button) still notifies the
+  // org room, so the channels screen can flip its setup check live.
+  if (loggedChannel && !orgIds.has(loggedChannel.orgId)) {
+    emitOrgEvent(loggedChannel.orgId, "webhook_received", { platform, count: 0 });
   }
 
   // Deliberately not awaited — the platform needs its 200 quickly.

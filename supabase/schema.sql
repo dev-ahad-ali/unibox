@@ -109,3 +109,20 @@ create index if not exists idx_notes_conversation on internal_notes(conversation
 alter table channels drop constraint if exists channels_platform_check;
 alter table channels add constraint channels_platform_check
   check (platform in ('messenger', 'instagram', 'whatsapp', 'line', 'telegram'));
+
+-- Webhook delivery log. One row per inbound webhook call — the observable
+-- record behind "is this channel actually receiving events?". Written by the
+-- service role during ingestion; read by admins on the channels screen.
+create table if not exists webhook_events (
+  id uuid primary key default gen_random_uuid(),
+  platform text not null,
+  external_account_id text,
+  channel_id uuid references channels(id) on delete set null,
+  org_id uuid references organizations(id) on delete cascade,
+  outcome text not null check (outcome in ('ingested', 'duplicate', 'unmatched', 'invalid_signature', 'malformed', 'empty')),
+  message_count int not null default 0,
+  received_at timestamptz default now()
+);
+
+create index if not exists idx_webhook_events_channel on webhook_events(channel_id, received_at desc);
+create index if not exists idx_webhook_events_org on webhook_events(org_id, received_at desc);

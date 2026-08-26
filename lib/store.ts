@@ -638,6 +638,81 @@ export async function getWebhookSecretForEvent(
   return decryptSecret(data.webhook_secret) ?? data.webhook_secret;
 }
 
+export type WebhookOutcome =
+  | "ingested"
+  | "duplicate"
+  | "unmatched"
+  | "invalid_signature"
+  | "malformed"
+  | "empty";
+
+/**
+ * Fire-and-forget delivery log. Failures are swallowed on purpose: the log is
+ * observability, and observability must never fail an ingestion that would
+ * otherwise succeed. Service client only — ingestion has no signed-in user.
+ */
+export async function logWebhookEvent(
+  db: Db,
+  input: {
+    platform: Platform;
+    externalAccountId?: string;
+    channelId?: string;
+    orgId?: string;
+    outcome: WebhookOutcome;
+    messageCount?: number;
+  }
+): Promise<void> {
+  if (!db) {
+    return;
+  }
+
+  const { error } = await db.from("webhook_events").insert({
+    platform: input.platform,
+    external_account_id: input.externalAccountId ?? null,
+    channel_id: input.channelId ?? null,
+    org_id: input.orgId ?? null,
+    outcome: input.outcome,
+    message_count: input.messageCount ?? 0
+  });
+
+  if (error) {
+    console.error(`[unibox] webhook_events insert failed: ${error.message}`);
+  }
+}
+
+export type ChannelHealth = { lastReceivedAt: string; lastOutcome: WebhookOutcome };
+
+/** Latest webhook event per channel, for the channels screen's health line. */
+export async function getChannelHealth(
+  db: Db,
+  orgId: string
+): Promise<Record<string, ChannelHealth>> {
+  if (!db) {
+    return {};
+  }
+
+  // Newest 200 events cover "when did this channel last hear from the
+  // platform" for any realistic channel count without a per-channel query.
+  const { data, error } = await db
+    .from("webhook_events")
+    .select("channel_id, outcome, received_at")
+    .eq("org_id", orgId)
+    .order("received_at", { ascending: false })
+    .limit(200);
+
+  if (reportQueryError("webhook_events", error) || !data) {
+    return {};
+  }
+
+  const health: Record<string, ChannelHealth> = {};
+  for (const row of data as Array<{ channel_id: string | null; outcome: WebhookOutcome; received_at: string }>) {
+    if (row.channel_id && !health[row.channel_id]) {
+      health[row.channel_id] = { lastReceivedAt: row.received_at, lastOutcome: row.outcome };
+    }
+  }
+  return health;
+}
+
 export type ChannelInput = {
   orgId: string;
   platform: Platform;
