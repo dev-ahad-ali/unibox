@@ -1,6 +1,6 @@
 # Unibox
 
-A unified social inbox. Customer messages from **Facebook Messenger, Instagram DM, WhatsApp, and LINE** land in one shared queue, and your team answers them all from one screen without switching apps or logging into four dashboards.
+A unified social inbox. Customer messages from **Facebook Messenger, Instagram DM, WhatsApp, LINE, and Telegram** land in one shared queue, and your team answers them all from one screen without switching apps or logging into four dashboards.
 
 Built from the specification in [`docs/base.md`](docs/base.md).
 
@@ -27,7 +27,7 @@ Built from the specification in [`docs/base.md`](docs/base.md).
 
 ## What it does
 
-- **One inbox, four platforms.** Messenger, Instagram, WhatsApp, and LINE conversations in a single list, filterable by channel and status.
+- **One inbox, five platforms.** Messenger, Instagram, WhatsApp, LINE, and Telegram conversations in a single list, filterable by channel and status.
 - **Real two-way messaging.** Inbound webhooks write to Postgres; replies go back out through each platform's own API.
 - **Live updates.** Socket.io pushes new messages to open browsers without a refresh.
 - **Multi-tenant from day one.** Every row is scoped to an organization, enforced by Postgres row-level security.
@@ -229,20 +229,15 @@ One Meta app covers all three.
 | `META_APP_SECRET` | yes, for any Meta channel | Signs every webhook. **Without it all Meta webhooks are rejected.** |
 | `META_VERIFY_TOKEN` | yes | Any string you choose; paste the same value into Meta's webhook dialog. |
 | `META_GRAPH_API_VERSION` | recommended | Defaults to `v26.0`, the newest version `graph.facebook.com` recognizes. |
-| `META_PAGE_ACCESS_TOKEN` | fallback | Used only when a channel row has no usable stored token. |
-| `INSTAGRAM_PAGE_ACCESS_TOKEN` | fallback | Falls back to `META_PAGE_ACCESS_TOKEN`. |
-| `WHATSAPP_ACCESS_TOKEN` | fallback | As above, for WhatsApp. |
-| `WHATSAPP_PHONE_NUMBER_ID` | fallback | The phone number **id**, not the number. |
 | `WHATSAPP_VERIFY_TOKEN` | no | Separate WhatsApp verify token; falls back to `META_VERIFY_TOKEN`. |
 
 ### LINE
 
 | Variable | Required | Purpose |
 | --- | --- | --- |
-| `LINE_CHANNEL_ACCESS_TOKEN` | fallback | Messaging API token. |
-| `LINE_CHANNEL_SECRET` | yes, for LINE | Validates `X-Line-Signature`. **Without it all LINE webhooks are rejected.** |
+| `LINE_CHANNEL_SECRET` | no | Single-account fallback for validating `X-Line-Signature` when the channel row stores no secret of its own. |
 
-**On "fallback":** tokens normally live encrypted in `channels.access_token_encrypted` and are set by connecting a channel in the UI. The env vars are a single-account convenience for local development; a stored token always wins.
+**Per-tenant credentials live in the database, not in env vars.** Access tokens (Meta Pages, WhatsApp numbers, LINE bots, Telegram bots) and webhook secrets are stored encrypted on each channel row, entered when the channel is connected at `/admin/channels`. The env vars above are operator-level only: they identify *your* app, never a tenant's account.
 
 ---
 
@@ -332,6 +327,7 @@ Reconnecting an account that already exists updates the row in place instead of 
 /api/webhooks/instagram
 /api/webhooks/whatsapp
 /api/webhooks/line
+/api/webhooks/telegram
 ```
 
 Register `<NEXT_PUBLIC_APP_URL>/api/webhooks/<platform>` in each platform's dashboard. For Meta, also enter your `META_VERIFY_TOKEN` when prompted. [Platform setup guides](#platform-setup-guides) has the dashboard-by-dashboard version.
@@ -514,6 +510,29 @@ curl -H "Authorization: Bearer <CHANNEL_ACCESS_TOKEN>" https://api.line.me/v2/bo
 
 The free LINE plan caps **push** messages at a few hundred per month. Replies sent within a minute of an inbound message use a reply token and do not count against that cap, but Unibox always sends via the push API, so heavy use will hit the limit.
 
+### Telegram
+
+The no-paperwork channel: no business account, no dashboard, no webhook form. Everything happens in the connect form.
+
+**1. Create a bot.** Message [@BotFather](https://t.me/BotFather) on Telegram, send `/newbot`, pick a name and username. It replies with a token like `7000000001:AAExample...`.
+
+**2. Connect it in Unibox.** On `/admin/channels`, pick Telegram in the manual form:
+
+- Bot id: the number before the colon in the token (`7000000001`)
+- Bot token: the whole token
+
+On submit, Unibox verifies the token with `getMe` (a token/id mismatch is rejected with the right id in the error), generates a webhook secret, stores both encrypted, and calls `setWebhook` pointing Telegram at `/api/webhooks/telegram?account=<bot id>` with that secret. There is no step 3.
+
+**3. Test.** Open your bot's `t.me/<username>` link, press Start, send a message. It appears under the Telegram filter; replies go back through `sendMessage`.
+
+| Error | Cause |
+| --- | --- |
+| "That token belongs to bot id …" on connect | The bot id field does not match the token. Use the number before the colon |
+| Connected but nothing arrives | `NEXT_PUBLIC_APP_URL` was wrong when the webhook was registered. Fix it and reconnect to re-register |
+| Send fails with "bot was blocked by the user" | The person stopped the bot; they need to press Start again |
+
+Telegram can only message people who started the bot first — same inbound-first rule as every other channel here.
+
 ### A note on Instagram
 
 The connect flow targets **Instagram API with Facebook Login**: it discovers accounts through `me/accounts?fields=instagram_business_account`, authorizes with the linked Page's token, and calls `graph.facebook.com`. For that to work the Instagram account must be professional (Business or Creator) and linked to a Facebook Page you administer, and **Settings → Messages and story replies → Message controls → Connected tools → Allow access to messages** must be on in the Instagram app.
@@ -585,7 +604,6 @@ In a Supabase-configured deployment the handshake requires a valid access token.
 - **Assignment, closing, and note creation are read-only in the UI.** The data model and store functions exist; the buttons are not wired.
 - **WhatsApp sends text only.** Template messages (needed outside the 24-hour window) and outbound media are not implemented.
 - **WhatsApp channels connected via OAuth store the long-lived user token**, which expires in ~60 days. A System User token via manual connect does not rotate.
-- **LINE verification uses a single `LINE_CHANNEL_SECRET`**, so one LINE channel per deployment. Meta platforms sign with one app secret and already support multiple accounts.
 - **One workspace per account.** Accepting an invite while already a member of another org is rejected rather than supported.
 - **Instagram works only through the Facebook Login flavour of the API.** Tokens from Meta's newer Instagram Login product target `graph.instagram.com` and are rejected. See [A note on Instagram](#a-note-on-instagram).
 - **Meta App Review** is required for `pages_messaging` and friends before the connect flow works for accounts outside your app's development roles.
@@ -599,9 +617,8 @@ In a Supabase-configured deployment the handshake requires a valid access token.
 1. Send invite emails instead of surfacing a copyable link.
 2. Wire assignment, close/reopen, and note creation in the inbox.
 3. WhatsApp template and media sends.
-4. Per-channel LINE secrets so one deployment can serve several LINE accounts.
-5. Response-time analytics — needs a first-response timestamp per conversation, which the schema does not record yet.
-6. Audit logging for admin actions.
+4. Response-time analytics — needs a first-response timestamp per conversation, which the schema does not record yet.
+5. Audit logging for admin actions.
 
 ---
 
