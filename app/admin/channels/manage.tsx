@@ -31,9 +31,9 @@ const FIELD_HELP: Record<Platform, { idLabel: string; idHint: string; tokenLabel
   },
   instagram: {
     idLabel: "Instagram account id",
-    idHint: "The IG Business account id linked to your Page, not the @handle.",
-    tokenLabel: "Page access token",
-    tokenHint: "Instagram messaging is authorized with the linked Page's token."
+    idHint: "The professional account id, not the @handle. With Instagram Login it is the `user_id` from graph.instagram.com/me.",
+    tokenLabel: "Access token",
+    tokenHint: "Either the linked Page's token (EAA…, Facebook Login) or an Instagram Login token (IGAA…) — both work."
   },
   whatsapp: {
     idLabel: "Phone number id",
@@ -95,8 +95,9 @@ export function ManualConnectForm() {
       <CardHeader>
         <CardTitle>Connect manually</CardTitle>
         <CardDescription>
-          For LINE and Telegram, and for Meta accounts you would rather paste a System User token
-          for. The token is verified against the platform before it is saved, then encrypted at
+          For LINE and Telegram, for Instagram Login (IGAA…) tokens, and for Meta accounts you
+          would rather paste a System User token for. The token is verified against the platform
+          before it is saved, then encrypted at
           rest. Telegram's webhook is registered automatically on connect.
         </CardDescription>
       </CardHeader>

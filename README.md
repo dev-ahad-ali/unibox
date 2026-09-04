@@ -228,6 +228,7 @@ One Meta app covers all three.
 | `META_APP_ID` | for OAuth connect | Meta app id. |
 | `META_APP_SECRET` | yes, for any Meta channel | Signs every webhook. **Without it all Meta webhooks are rejected.** |
 | `META_VERIFY_TOKEN` | yes | Any string you choose; paste the same value into Meta's webhook dialog. |
+| `INSTAGRAM_APP_SECRET` | only for Instagram Login | The Instagram-Login product signs its webhooks with its own app secret. |
 | `META_GRAPH_API_VERSION` | recommended | Defaults to `v26.0`, the newest version `graph.facebook.com` recognizes. |
 | `WHATSAPP_VERIFY_TOKEN` | no | Separate WhatsApp verify token; falls back to `META_VERIFY_TOKEN`. |
 
@@ -301,7 +302,7 @@ For LINE (which has no OAuth) and for Meta accounts where you would rather paste
 | Platform | What goes in "account id" | Where to find it |
 | --- | --- | --- |
 | Messenger | Facebook Page id | Meta dashboard → your Page → About |
-| Instagram | IG Business account id — **not** the @handle | Linked to your Page |
+| Instagram | Professional account id — **not** the @handle | Facebook Login: the id linked to your Page. Instagram Login: `user_id` from `GET graph.instagram.com/me?fields=user_id` |
 | WhatsApp | Phone number **id** — not the phone number | WhatsApp → API Setup |
 | LINE | Bot user id | `GET https://api.line.me/v2/bot/info` → `userId` |
 
@@ -537,7 +538,7 @@ Telegram can only message people who started the bot first — same inbound-firs
 
 The connect flow targets **Instagram API with Facebook Login**: it discovers accounts through `me/accounts?fields=instagram_business_account`, authorizes with the linked Page's token, and calls `graph.facebook.com`. For that to work the Instagram account must be professional (Business or Creator) and linked to a Facebook Page you administer, and **Settings → Messages and story replies → Message controls → Connected tools → Allow access to messages** must be on in the Instagram app.
 
-Meta's newer **Instagram API with Instagram Login** product is a different integration. It issues `IGAA…` user tokens, calls `graph.instagram.com`, and uses the `instagram_business_*` permission names. Those tokens are rejected by this app with *Invalid OAuth access token - Cannot parse access token*, because they are being sent to the wrong host. If your dashboard is set up that way, either link the account to a Page and use the Page token, or adapt the adapter to `graph.instagram.com`.
+Meta's newer **Instagram API with Instagram Login** product is also supported, via the manual connect form. It issues `IGAA…` tokens that only work against `graph.instagram.com`, and the adapter picks the host from the token prefix — so paste either flavour and it routes correctly. Two things differ from the Page flavour: the account id is the `user_id` returned by `GET graph.instagram.com/me?fields=user_id` (the connect check tells you the right id if you paste the wrong one), and its webhooks are signed with the **Instagram app secret** from the Instagram product page — set it as `INSTAGRAM_APP_SECRET` alongside `META_APP_SECRET`.
 
 In development mode, both the professional account and any account you DM from must hold the **Instagram tester** role and have accepted the invite under **Settings → Website permissions → Tester invites**. Unlike Messenger, being the app admin on Facebook does not cover your Instagram account.
 
@@ -605,7 +606,7 @@ In a Supabase-configured deployment the handshake requires a valid access token.
 - **WhatsApp sends text only.** Template messages (needed outside the 24-hour window) and outbound media are not implemented.
 - **WhatsApp channels connected via OAuth store the long-lived user token**, which expires in ~60 days. A System User token via manual connect does not rotate.
 - **One workspace per account.** Accepting an invite while already a member of another org is rejected rather than supported.
-- **Instagram works only through the Facebook Login flavour of the API.** Tokens from Meta's newer Instagram Login product target `graph.instagram.com` and are rejected. See [A note on Instagram](#a-note-on-instagram).
+- **Instagram's one-click OAuth covers only the Facebook Login flavour.** Instagram Login (`IGAA…`) tokens work, but through the manual connect form. See [A note on Instagram](#a-note-on-instagram).
 - **Meta App Review** is required for `pages_messaging` and friends before the connect flow works for accounts outside your app's development roles.
 - **No audit log** on destructive admin actions.
 - **WeChat is out of scope** — see the note at the end of `docs/base.md`.

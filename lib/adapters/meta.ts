@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { graphRequest, verifyMetaSignature } from "@/lib/adapters/graph";
+import { graphRequest, verifyMetaSignature, type GraphHost } from "@/lib/adapters/graph";
 import type {
   AuthorizedChannel,
   ChannelAdapter,
@@ -46,6 +46,17 @@ function accessToken(channel: AuthorizedChannel, platform: "messenger" | "instag
   }
 
   return token;
+}
+
+/**
+ * Instagram supports two token flavours. Page tokens ("Instagram API with
+ * Facebook Login") start with EAA and talk to graph.facebook.com; tokens from
+ * the newer "Instagram API with Instagram Login" product start with IGAA and
+ * only work against graph.instagram.com. The prefix decides the host, so a
+ * channel connected with either flavour just works.
+ */
+function hostFor(token: string): GraphHost {
+  return token.startsWith("IG") ? "instagram" : "facebook";
 }
 
 function parseMetaEntries(payload: any): ParsedWebhook {
@@ -124,6 +135,7 @@ export function createMetaAdapter(platform: "messenger" | "instagram"): ChannelA
         {
           method: "POST",
           accessToken: token,
+          host: hostFor(token),
           body: {
             recipient: { id: externalContactId },
             messaging_type: "RESPONSE",
@@ -147,6 +159,26 @@ export function createMetaAdapter(platform: "messenger" | "instagram"): ChannelA
     },
     async verifyCredentials(channel: AuthorizedChannel) {
       const token = accessToken(channel, platform);
+
+      if (platform === "instagram" && hostFor(token) === "instagram") {
+        // Instagram-Login tokens can only introspect themselves via /me.
+        // `user_id` is the professional account id that arrives as `entry.id`
+        // on webhooks — the id the channel must be stored under for routing.
+        const data = await graphRequest<{ id?: string; user_id?: string; username?: string; name?: string }>(
+          "me?fields=user_id,username,name",
+          { method: "GET", accessToken: token, host: "instagram" }
+        );
+
+        const actualId = data.user_id ?? data.id;
+        if (actualId && actualId !== channel.externalAccountId) {
+          throw new Error(
+            `This token belongs to Instagram account id ${actualId} (@${data.username ?? "unknown"}), not ${channel.externalAccountId}. Use ${actualId} as the account id.`
+          );
+        }
+
+        return { label: data.name || data.username || channel.externalAccountId };
+      }
+
       const fields = platform === "instagram" ? "id,username,name" : "id,name";
       const data = await graphRequest<{ id?: string; name?: string; username?: string }>(
         `${channel.externalAccountId}?fields=${fields}`,
@@ -160,7 +192,7 @@ export function createMetaAdapter(platform: "messenger" | "instagram"): ChannelA
       const fields = platform === "instagram" ? "name,username,profile_pic" : "name,profile_pic";
       const data = await graphRequest<{ name?: string; username?: string; profile_pic?: string }>(
         `${externalContactId}?fields=${fields}`,
-        { method: "GET", accessToken: token }
+        { method: "GET", accessToken: token, host: hostFor(token) }
       );
 
       return {

@@ -16,17 +16,25 @@ export function graphVersion() {
   return process.env.META_GRAPH_API_VERSION || DEFAULT_GRAPH_VERSION;
 }
 
-export function graphUrl(path: string) {
-  return `https://graph.facebook.com/${graphVersion()}/${path.replace(/^\//, "")}`;
+export function graphUrl(path: string, host: GraphHost = "facebook") {
+  return `https://graph.${host}.com/${graphVersion()}/${path.replace(/^\//, "")}`;
 }
+
+/**
+ * Meta runs two Graph surfaces: graph.facebook.com for Page-scoped (EAA…)
+ * tokens, and graph.instagram.com for the newer "Instagram API with Instagram
+ * Login" (IGAA…) tokens. Sending a token to the wrong host fails with
+ * "Cannot parse access token", so callers pick the host per token.
+ */
+export type GraphHost = "facebook" | "instagram";
 
 type GraphError = { error?: { message?: string; code?: number; type?: string } };
 
 export async function graphRequest<T>(
   path: string,
-  init: { method: "GET" | "POST"; accessToken: string; body?: unknown }
+  init: { method: "GET" | "POST"; accessToken: string; body?: unknown; host?: GraphHost }
 ): Promise<T> {
-  const response = await fetch(graphUrl(path), {
+  const response = await fetch(graphUrl(path, init.host), {
     method: init.method,
     headers: {
       Authorization: `Bearer ${init.accessToken}`,
@@ -53,8 +61,13 @@ export async function graphRequest<T>(
  * an unsigned webhook endpoint lets anyone inject messages into the inbox.
  */
 export function verifyMetaSignature({ request, rawBody }: WebhookContext) {
-  const appSecret = process.env.META_APP_SECRET;
-  if (!appSecret) {
+  // The Instagram-Login product signs its webhooks with its own "Instagram app
+  // secret", which differs from the Meta app secret shown on the app's Basic
+  // Settings page. Accept a payload signed by either configured secret.
+  const secrets = [process.env.META_APP_SECRET, process.env.INSTAGRAM_APP_SECRET].filter(
+    (value): value is string => Boolean(value)
+  );
+  if (secrets.length === 0) {
     return false;
   }
 
@@ -63,7 +76,8 @@ export function verifyMetaSignature({ request, rawBody }: WebhookContext) {
     return false;
   }
 
-  return safeEqual(hmacSha256Hex(appSecret, rawBody), signature.slice("sha256=".length));
+  const received = signature.slice("sha256=".length);
+  return secrets.some(secret => safeEqual(hmacSha256Hex(secret, rawBody), received));
 }
 
 /** Handles the `hub.challenge` GET that Meta sends when you subscribe a webhook. */
