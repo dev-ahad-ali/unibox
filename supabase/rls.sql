@@ -104,6 +104,7 @@ to authenticated
 using (org_id = current_org_id());
 
 drop policy if exists "admins can manage membership" on org_users;
+drop policy if exists "admins can add membership" on org_users;
 -- Split from FOR ALL: a FOR ALL policy also grants SELECT, and permissive
 -- policies are OR'd together, so it would silently widen read access.
 create policy "admins can add membership"
@@ -138,6 +139,7 @@ to authenticated
 using (org_id = current_org_id());
 
 drop policy if exists "admins can manage channels" on channels;
+drop policy if exists "admins can add channels" on channels;
 create policy "admins can add channels"
 on channels
 for insert
@@ -180,6 +182,7 @@ using (
 -- policies OR together, that handed agents SELECT on every conversation in the
 -- org and made the visibility rule above dead code. Writes are split out.
 drop policy if exists "admins and agents can manage conversations" on conversations;
+drop policy if exists "admins and agents can create conversations" on conversations;
 create policy "admins and agents can create conversations"
 on conversations
 for insert
@@ -293,6 +296,7 @@ to authenticated
 using (current_org_role() = 'admin' and org_id = current_org_id());
 
 drop policy if exists "admins can manage invites" on org_invites;
+drop policy if exists "admins can create invites" on org_invites;
 create policy "admins can create invites"
 on org_invites
 for insert
