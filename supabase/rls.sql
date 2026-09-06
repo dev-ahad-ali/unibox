@@ -323,3 +323,54 @@ on webhook_events
 for select
 to authenticated
 using (org_id = current_org_id());
+
+-- ---------------------------------------------------------------------------
+-- org_credentials
+-- ---------------------------------------------------------------------------
+-- Per-org platform app credentials (the Meta app id / secret / verify token
+-- that used to be deployment-wide env vars). Admins of the org manage them;
+-- agents and viewers cannot see the row at all.
+alter table org_credentials enable row level security;
+
+-- Same reasoning as channels: RLS filters rows, not columns. The app secret
+-- ciphertext is never handed to the `authenticated` role — the server reads it
+-- with the service key when it signs an OAuth exchange or verifies a webhook.
+-- `app_id` is a public identifier and the verify token is a value the admin
+-- invented themselves, so both are readable to admins for display.
+revoke all on org_credentials from anon, authenticated;
+grant select (id, org_id, provider, app_id, updated_by, created_at, updated_at)
+  on org_credentials to authenticated;
+grant insert (id, org_id, provider, app_id, app_secret_encrypted, verify_token_encrypted,
+  instagram_app_secret_encrypted, updated_by, updated_at) on org_credentials to authenticated;
+grant update (app_id, app_secret_encrypted, verify_token_encrypted,
+  instagram_app_secret_encrypted, updated_by, updated_at) on org_credentials to authenticated;
+grant delete on org_credentials to authenticated;
+
+drop policy if exists "admins can read credentials" on org_credentials;
+create policy "admins can read credentials"
+on org_credentials
+for select
+to authenticated
+using (current_org_role() = 'admin' and org_id = current_org_id());
+
+drop policy if exists "admins can add credentials" on org_credentials;
+create policy "admins can add credentials"
+on org_credentials
+for insert
+to authenticated
+with check (current_org_role() = 'admin' and org_id = current_org_id());
+
+drop policy if exists "admins can update credentials" on org_credentials;
+create policy "admins can update credentials"
+on org_credentials
+for update
+to authenticated
+using (current_org_role() = 'admin' and org_id = current_org_id())
+with check (current_org_role() = 'admin' and org_id = current_org_id());
+
+drop policy if exists "admins can remove credentials" on org_credentials;
+create policy "admins can remove credentials"
+on org_credentials
+for delete
+to authenticated
+using (current_org_role() = 'admin' and org_id = current_org_id());

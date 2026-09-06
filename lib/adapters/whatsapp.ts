@@ -116,6 +116,23 @@ function phoneNumberId(channel: AuthorizedChannel) {
 }
 
 export const whatsappAdapter: ChannelAdapter = {
+  /**
+   * Names the addressed number so the pipeline can find its organization — and
+   * therefore which Meta app secret to verify against — before checking the
+   * signature. `entry[].id` is the WABA id, not the routing key.
+   */
+  webhookAccountId(payload: any) {
+    const entries = Array.isArray(payload?.entry) ? payload.entry : [];
+    for (const entry of entries) {
+      for (const change of entry?.changes ?? []) {
+        const phoneNumberId = change?.value?.metadata?.phone_number_id;
+        if (typeof phoneNumberId === "string") {
+          return phoneNumberId;
+        }
+      }
+    }
+    return undefined;
+  },
   verifyWebhook(context) {
     // WhatsApp Cloud API callbacks are signed with the Meta app secret.
     return verifyMetaSignature(context);

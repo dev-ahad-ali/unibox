@@ -65,10 +65,15 @@ export default async function SetupPage({
   const params = (await searchParams) ?? {};
   const initial = pickPlatform(params.platform);
 
+  // Meta callbacks name the workspace. Meta's verification GET carries no
+  // account id, so without `?org=` there is nothing to match a verify token
+  // against but every tenant's.
+  const scoped = (platform: string) => appUrl(`/api/webhooks/${platform}?org=${member.orgId}`);
+
   const urls: SetupUrls = {
-    messenger: appUrl("/api/webhooks/messenger"),
-    instagram: appUrl("/api/webhooks/instagram"),
-    whatsapp: appUrl("/api/webhooks/whatsapp"),
+    messenger: scoped("messenger"),
+    instagram: scoped("instagram"),
+    whatsapp: scoped("whatsapp"),
     line: appUrl("/api/webhooks/line"),
     telegram: appUrl("/api/webhooks/telegram"),
     metaCallback: appUrl("/admin/channels/connect/meta/callback")

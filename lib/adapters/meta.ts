@@ -119,6 +119,17 @@ function parseMetaEntries(payload: any): ParsedWebhook {
 
 export function createMetaAdapter(platform: "messenger" | "instagram"): ChannelAdapter {
   return {
+    /**
+     * `entry[].id` is the Page id (Messenger) or the professional account id
+     * (Instagram). Exposing it lets the pipeline resolve the addressed
+     * organization, and so its Meta app secret, before the signature is
+     * checked — without it every tenant's secret would be a candidate.
+     */
+    webhookAccountId(payload: any) {
+      const entries = Array.isArray(payload?.entry) ? payload.entry : [];
+      const id = entries.find((entry: any) => typeof entry?.id === "string")?.id;
+      return typeof id === "string" ? id : undefined;
+    },
     verifyWebhook(context) {
       return verifyMetaSignature(context);
     },

@@ -1,6 +1,6 @@
 import Link from "next/link";
 import type { ReactNode } from "react";
-import { BarChart3, Compass, Inbox, LogOut, Radio, Users } from "lucide-react";
+import { BarChart3, Compass, Inbox, KeyRound, LogOut, Radio, Users } from "lucide-react";
 
 import { signOut } from "@/app/(auth)/login/actions";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
@@ -21,6 +21,7 @@ const NAV = [
         highlight: true,
     },
     { href: "/admin/channels", label: "Channels", Icon: Radio, roles: ["admin"] },
+    { href: "/admin/credentials", label: "Credentials", Icon: KeyRound, roles: ["admin"] },
     // { href: "/admin/agents", label: "Agents", Icon: Users, roles: ["admin"] },
     { href: "/admin/analytics", label: "Analytics", Icon: BarChart3, roles: ["admin", "viewer"] },
 ] as const satisfies ReadonlyArray<{

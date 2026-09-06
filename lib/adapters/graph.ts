@@ -60,13 +60,20 @@ export async function graphRequest<T>(
  * configured; without one we refuse the payload rather than accept it, because
  * an unsigned webhook endpoint lets anyone inject messages into the inbox.
  */
-export function verifyMetaSignature({ request, rawBody }: WebhookContext) {
-  // The Instagram-Login product signs its webhooks with its own "Instagram app
-  // secret", which differs from the Meta app secret shown on the app's Basic
-  // Settings page. Accept a payload signed by either configured secret.
-  const secrets = [process.env.META_APP_SECRET, process.env.INSTAGRAM_APP_SECRET].filter(
-    (value): value is string => Boolean(value)
-  );
+export function verifyMetaSignature({ request, rawBody, appSecrets }: WebhookContext) {
+  // `appSecrets` are the addressed organization's, resolved before this runs.
+  // The env values are the deployment operator's own app, kept as a fallback so
+  // channels connected before credentials moved into the database keep working.
+  //
+  // Two secrets can be in play for one org: the app secret from Basic Settings,
+  // and the separate secret the "Instagram API with Instagram Login" product
+  // signs with.
+  const secrets = [
+    ...(appSecrets ?? []),
+    process.env.META_APP_SECRET,
+    process.env.INSTAGRAM_APP_SECRET
+  ].filter((value): value is string => Boolean(value));
+
   if (secrets.length === 0) {
     return false;
   }
@@ -80,18 +87,38 @@ export function verifyMetaSignature({ request, rawBody }: WebhookContext) {
   return secrets.some(secret => safeEqual(hmacSha256Hex(secret, rawBody), received));
 }
 
-/** Handles the `hub.challenge` GET that Meta sends when you subscribe a webhook. */
-export function handleMetaVerification(request: Request, expectedToken: string | undefined) {
+/**
+ * Handles the `hub.challenge` GET that Meta sends when you subscribe a webhook.
+ *
+ * Takes every acceptable token rather than one, because each organization
+ * chooses its own verify token and this request carries no account id to
+ * narrow them by. Echoing the challenge proves only that the caller already
+ * knew a valid token; it grants no access, and inbound events still have to
+ * carry a signature from that org's app secret.
+ */
+export function handleMetaVerification(
+  request: Request,
+  expectedTokens: ReadonlyArray<string | undefined | null> | string | undefined
+) {
   const url = new URL(request.url);
   const mode = url.searchParams.get("hub.mode");
   const challenge = url.searchParams.get("hub.challenge");
   const verifyToken = url.searchParams.get("hub.verify_token");
 
-  if (!expectedToken) {
-    return new Response("Webhook verify token is not configured on this server", { status: 500 });
+  const candidates = (typeof expectedTokens === "string" ? [expectedTokens] : expectedTokens ?? [])
+    .filter((token): token is string => Boolean(token));
+
+  if (candidates.length === 0) {
+    return new Response(
+      "No Meta verify token is configured. Add one at /admin/credentials.",
+      { status: 500 }
+    );
   }
 
-  if (mode !== "subscribe" || !challenge || !verifyToken || !safeEqual(expectedToken, verifyToken)) {
+  const matches =
+    Boolean(verifyToken) && candidates.some(token => safeEqual(token, verifyToken as string));
+
+  if (mode !== "subscribe" || !challenge || !matches) {
     return new Response("Invalid verify token", { status: 403 });
   }
 

@@ -9,6 +9,7 @@ import {
   updateMessageStatus,
   upsertConversation
 } from "@/lib/store";
+import { isMetaPlatform, resolveMetaAppSecrets } from "@/lib/meta-app";
 import { createServiceClient, isSupabaseConfigured, type Db } from "@/lib/supabase";
 import type { Channel, Platform } from "@/lib/types";
 import { emitOrgEvent, emitConversationEvent } from "@/lib/socket";
@@ -31,17 +32,26 @@ export async function processWebhook(platform: Platform, request: Request) {
     return Response.json({ error: "Malformed webhook payload" }, { status: 400 });
   }
 
-  // Platforms that authenticate with a per-channel secret (LINE, Telegram)
-  // name the addressed account in the payload or URL, so the secret can be
-  // looked up before verification. Parsing untrusted JSON first is fine —
-  // nothing is ingested until the signature check below passes.
+  // Every adapter names the account a webhook is addressed to, so the right
+  // secret can be looked up before the signature is checked. Parsing untrusted
+  // JSON first is fine — nothing is ingested until verification passes below.
   const accountHint = adapter.webhookAccountId?.(payload, request);
-  let channelSecret: string | null = null;
-  if (adapter.webhookAccountId) {
-    channelSecret = await getWebhookSecretForEvent(logDb, platform, accountHint);
-  }
 
-  if (!(await adapter.verifyWebhook({ request, rawBody, secret: channelSecret }))) {
+  // Two authentication shapes. LINE and Telegram sign with a secret stored on
+  // the channel row. Meta signs with its developer app's secret, which belongs
+  // to the organization that owns the addressed Page, Instagram account, or
+  // number — resolving that org first is what stops one tenant's app secret
+  // from authenticating a payload aimed at another tenant's account.
+  const usesMetaApp = isMetaPlatform(platform);
+  const channelSecret =
+    !usesMetaApp && adapter.webhookAccountId
+      ? await getWebhookSecretForEvent(logDb, platform, accountHint)
+      : null;
+  const appSecrets = usesMetaApp
+    ? await resolveMetaAppSecrets(platform, request, accountHint)
+    : undefined;
+
+  if (!(await adapter.verifyWebhook({ request, rawBody, secret: channelSecret, appSecrets }))) {
     void logWebhookEvent(logDb, {
       platform,
       externalAccountId: accountHint,

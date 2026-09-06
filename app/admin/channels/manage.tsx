@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useActionState, useState } from "react";
 import { useFormStatus } from "react-dom";
 import { Check, Plug, RefreshCw, Trash2 } from "lucide-react";
@@ -68,8 +69,11 @@ export function ConnectMetaButton({ configured }: Readonly<{ configured: boolean
   if (!configured) {
     return (
       <p className="text-xs text-muted-foreground">
-        Set <code>META_APP_ID</code> and <code>META_APP_SECRET</code> to enable one-click Meta
-        connect.
+        Add your Meta app id and secret on the{" "}
+        <Link href="/admin/credentials" className="text-primary underline underline-offset-2">
+          credentials page
+        </Link>{" "}
+        to enable one-click Meta connect.
       </p>
     );
   }

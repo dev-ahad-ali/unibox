@@ -1,8 +1,11 @@
 import type { ReactNode } from "react";
-import { AlertTriangle, ChevronRight, Info, Lightbulb, ServerCog } from "lucide-react";
+import { AlertTriangle, ChevronRight, Info, Lightbulb } from "lucide-react";
 
-import { CopyButton } from "./copy-button";
+import { CopyField } from "@/components/ui/copy-field";
 import { cn } from "@/lib/utils";
+
+// Re-exported so a guide can pull every building block from one module.
+export { CopyField };
 
 /**
  * Layout primitives for the setup guide. Each platform guide is a list of
@@ -41,14 +44,9 @@ export function Steps({ children }: Readonly<{ children: ReactNode }>) {
 const CALLOUT = {
   info: { Icon: Info, className: "border-primary/30 bg-primary/5 text-foreground", iconClass: "text-primary" },
   tip: { Icon: Lightbulb, className: "border-success/30 bg-success/5 text-foreground", iconClass: "text-success" },
-  warning: { Icon: AlertTriangle, className: "border-warning/40 bg-warning/10 text-foreground", iconClass: "text-warning" },
-  operator: { Icon: ServerCog, className: "border-border bg-secondary/40 text-foreground", iconClass: "text-muted-foreground" }
+  warning: { Icon: AlertTriangle, className: "border-warning/40 bg-warning/10 text-foreground", iconClass: "text-warning" }
 } as const;
 
-/**
- * `operator` marks steps only the person who deployed Unibox can do (env
- * vars, redeploys). Tenants on a hosted deployment can skip those.
- */
 export function Callout({
   tone = "info",
   title,
@@ -59,7 +57,7 @@ export function Callout({
     <div className={cn("flex gap-2.5 rounded-lg border px-3 py-2.5 text-[13px] leading-relaxed", className)}>
       <Icon className={cn("mt-0.5 size-4 shrink-0", iconClass)} aria-hidden />
       <div className="min-w-0 space-y-1">
-        {title ? <div className="font-semibold">{tone === "operator" ? `Deployment owner: ${title}` : title}</div> : null}
+        {title ? <div className="font-semibold">{title}</div> : null}
         <div className="text-muted-foreground [&_code]:rounded [&_code]:bg-secondary [&_code]:px-1 [&_code]:py-0.5 [&_code]:font-mono [&_code]:text-[12px] [&_code]:text-foreground">
           {children}
         </div>
@@ -81,22 +79,6 @@ export function UiPath({ parts }: Readonly<{ parts: string[] }>) {
         </span>
       ))}
     </span>
-  );
-}
-
-/** A value the reader pastes somewhere else, with a one-click copy. */
-export function CopyField({ label, value, hint }: Readonly<{ label: string; value: string; hint?: ReactNode }>) {
-  return (
-    <div className="rounded-lg border border-border bg-card p-3">
-      <div className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">{label}</div>
-      <div className="flex items-center gap-2">
-        <code className="min-w-0 flex-1 truncate rounded-md bg-secondary px-2 py-1.5 font-mono text-[12px] text-foreground">
-          {value}
-        </code>
-        <CopyButton value={value} />
-      </div>
-      {hint ? <div className="mt-1.5 text-[11px] text-muted-foreground">{hint}</div> : null}
-    </div>
   );
 }
 

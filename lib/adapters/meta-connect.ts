@@ -1,6 +1,6 @@
 import { graphRequest, graphUrl, graphVersion } from "@/lib/adapters/graph";
 import { appUrl } from "@/lib/app-url";
-import type { Platform } from "@/lib/types";
+import type { MetaCredentials, Platform } from "@/lib/types";
 
 /**
  * The admin-facing half of the Meta integration: the OAuth handshake that turns
@@ -40,19 +40,15 @@ const SCOPES = [
 export const META_STATE_COOKIE = "unibox_meta_oauth_state";
 export const META_TOKEN_COOKIE = "unibox_meta_user_token";
 
-export function metaConfigured() {
-  return Boolean(process.env.META_APP_ID && process.env.META_APP_SECRET);
-}
-
 export const META_CALLBACK_PATH = "/admin/channels/connect/meta/callback";
 
 export function metaRedirectUri() {
   return appUrl(META_CALLBACK_PATH);
 }
 
-export function metaAuthorizeUrl(state: string) {
+export function metaAuthorizeUrl(state: string, appId: string) {
   const params = new URLSearchParams({
-    client_id: process.env.META_APP_ID ?? "",
+    client_id: appId,
     redirect_uri: metaRedirectUri(),
     state,
     response_type: "code",
@@ -62,12 +58,17 @@ export function metaAuthorizeUrl(state: string) {
   return `https://www.facebook.com/${graphVersion()}/dialog/oauth?${params.toString()}`;
 }
 
-/** Trades the one-time code for a user token, then upgrades it to a long-lived one. */
-export async function exchangeCodeForUserToken(code: string) {
-  const appId = process.env.META_APP_ID;
-  const appSecret = process.env.META_APP_SECRET;
+/**
+ * Trades the one-time code for a user token, then upgrades it to a long-lived
+ * one. The app credentials are passed in rather than read from the environment,
+ * because they belong to the organization doing the connecting.
+ */
+export async function exchangeCodeForUserToken(code: string, credentials: MetaCredentials) {
+  const { appId, appSecret } = credentials;
   if (!appId || !appSecret) {
-    throw new Error("META_APP_ID and META_APP_SECRET must be set to connect a Meta account.");
+    throw new Error(
+      "This workspace has no Meta app id and secret. Add them at /admin/credentials."
+    );
   }
 
   const shortLived = new URLSearchParams({

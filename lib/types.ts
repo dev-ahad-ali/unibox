@@ -126,6 +126,34 @@ export interface OutboundMessage {
 }
 
 /**
+ * The Meta developer app a workspace connects its Pages, Instagram accounts,
+ * and WhatsApp numbers through. Stored per organization so one deployment can
+ * serve tenants that each bring their own Meta app, rather than one app (and
+ * one deployment) per customer.
+ */
+export interface MetaCredentials {
+  /** Public app id from App settings -> Basic. */
+  appId?: string;
+  /** Signs webhook payloads and the OAuth token exchange. */
+  appSecret?: string;
+  /** Echoed back during Meta's `hub.challenge` handshake. */
+  verifyToken?: string;
+  /** Separate secret used by the Instagram-Login product's webhooks. */
+  instagramAppSecret?: string;
+}
+
+/** What the credentials screen may show: identifiers yes, secrets never. */
+export interface MetaCredentialsSummary {
+  appId?: string;
+  verifyToken?: string;
+  hasAppSecret: boolean;
+  hasInstagramAppSecret: boolean;
+  updatedAt?: string;
+  /** True when the values come from deployment env vars rather than this org. */
+  fromEnvironment: boolean;
+}
+
+/**
  * Signature verification needs the exact bytes the platform signed, so the raw
  * body travels alongside the request rather than inside it.
  */
@@ -134,18 +162,24 @@ export interface WebhookContext {
   rawBody: string;
   /**
    * The matched channel's decrypted webhook secret, when the adapter routes
-   * by per-channel secrets (LINE, Telegram). Meta platforms sign with the
-   * operator app secret instead and ignore this.
+   * by per-channel secrets (LINE, Telegram).
    */
   secret?: string | null;
+  /**
+   * App-level signing secrets to accept, for platforms that sign with the
+   * developer app's secret rather than a per-channel one (Meta). Resolved from
+   * the addressed organization's credentials before verification runs, so one
+   * tenant's app secret can never authenticate a payload aimed at another's.
+   */
+  appSecrets?: readonly string[];
 }
 
 export interface ChannelAdapter {
   verifyWebhook(context: WebhookContext): Promise<boolean> | boolean;
   /**
    * Extracts the platform account id this webhook is addressed to, so the
-   * per-channel secret can be looked up before verification. Adapters that
-   * verify with an app-level secret omit this.
+   * signing secret — per channel for LINE and Telegram, per organization for
+   * Meta — can be looked up before verification runs.
    */
   webhookAccountId?(payload: unknown, request: Request): string | undefined;
   parseIncoming(payload: unknown): ParsedWebhook;

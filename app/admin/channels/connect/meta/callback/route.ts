@@ -6,6 +6,7 @@ import {
   exchangeCodeForUserToken
 } from "@/lib/adapters/meta-connect";
 import { requireRole } from "@/lib/auth";
+import { getMetaCredentials } from "@/lib/meta-app";
 import { encryptSecret, isEncryptionConfigured, safeEqual } from "@/lib/crypto";
 /**
  * Handles Meta's redirect back. Exchanges the code for a long-lived user token
@@ -13,7 +14,7 @@ import { encryptSecret, isEncryptionConfigured, safeEqual } from "@/lib/crypto";
  * assets without the token ever reaching the browser in readable form.
  */
 export async function GET(request: Request) {
-  await requireRole(["admin"], "/admin/channels");
+  const session = await requireRole(["admin"], "/admin/channels");
 
   const url = new URL(request.url);
   const cookieStore = await cookies();
@@ -45,7 +46,10 @@ export async function GET(request: Request) {
 
   let userToken: string;
   try {
-    userToken = await exchangeCodeForUserToken(code);
+    userToken = await exchangeCodeForUserToken(
+      code,
+      await getMetaCredentials(session.member.orgId)
+    );
   } catch (cause) {
     return fail(cause instanceof Error ? cause.message : "Token exchange failed.");
   }

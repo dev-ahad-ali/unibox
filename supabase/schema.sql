@@ -126,3 +126,28 @@ create table if not exists webhook_events (
 
 create index if not exists idx_webhook_events_channel on webhook_events(channel_id, received_at desc);
 create index if not exists idx_webhook_events_org on webhook_events(org_id, received_at desc);
+
+-- Per-organization platform app credentials. Before this table the Meta app id,
+-- app secret, and verify token were deployment-level env vars, which meant one
+-- Meta developer app per deployment — so every tenant needed their own copy of
+-- Unibox. Storing them per org lets one deployment serve tenants that each
+-- bring their own Meta app. Secrets are AES-256-GCM encrypted by the app, never
+-- stored in plaintext, and never exposed to the `authenticated` role.
+create table if not exists org_credentials (
+  id uuid primary key default gen_random_uuid(),
+  org_id uuid not null references organizations(id) on delete cascade,
+  provider text not null check (provider in ('meta')),
+  -- Public identifier, safe to show in the dashboard.
+  app_id text,
+  app_secret_encrypted text,
+  verify_token_encrypted text,
+  -- Meta's "Instagram API with Instagram Login" product signs its webhooks with
+  -- a second secret, separate from the app secret on Basic Settings.
+  instagram_app_secret_encrypted text,
+  updated_by uuid references org_users(id) on delete set null,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  unique (org_id, provider)
+);
+
+create index if not exists idx_org_credentials_org on org_credentials(org_id);

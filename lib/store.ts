@@ -10,6 +10,7 @@ import type {
   InternalNote,
   Message,
   MessageStatus,
+  MetaCredentials,
   OrgUser,
   Organization,
   Platform
@@ -1330,4 +1331,197 @@ export async function summarizeInbox(db: Db, orgId: string) {
     unreadCount: inboundResult.count ?? 0,
     activeChannels: activeChannelsResult.count ?? 0
   };
+}
+
+/* -------------------------------------------------------------------------- */
+/* Per-organization app credentials                                           */
+/* -------------------------------------------------------------------------- */
+
+type OrgCredentialRow = {
+  org_id: string;
+  app_id: string | null;
+  app_secret_encrypted: string | null;
+  verify_token_encrypted: string | null;
+  instagram_app_secret_encrypted: string | null;
+  updated_at: string | null;
+};
+
+const CREDENTIAL_COLUMNS =
+  "org_id, app_id, app_secret_encrypted, verify_token_encrypted, instagram_app_secret_encrypted, updated_at";
+
+/** Seeded rows may hold plaintext; decryptSecret returns null for those. */
+function readSecret(value: string | null): string | undefined {
+  if (!value) {
+    return undefined;
+  }
+  return (decryptSecret(value) ?? value) || undefined;
+}
+
+function toMetaCredentials(row: OrgCredentialRow): MetaCredentials & { updatedAt?: string } {
+  return {
+    appId: row.app_id ?? undefined,
+    appSecret: readSecret(row.app_secret_encrypted),
+    verifyToken: readSecret(row.verify_token_encrypted),
+    instagramAppSecret: readSecret(row.instagram_app_secret_encrypted),
+    updatedAt: row.updated_at ?? undefined
+  };
+}
+
+/**
+ * The Meta app credentials an organization saved on the credentials screen.
+ *
+ * Reads the encrypted columns, so this must run on the service client — those
+ * columns are revoked from the `authenticated` role, and a user-scoped client
+ * silently receives nulls for them.
+ */
+export async function getStoredMetaCredentials(
+  db: Db,
+  orgId: string
+): Promise<(MetaCredentials & { updatedAt?: string }) | undefined> {
+  if (!db) {
+    return undefined;
+  }
+
+  const { data } = await db
+    .from("org_credentials")
+    .select(CREDENTIAL_COLUMNS)
+    .eq("org_id", orgId)
+    .eq("provider", "meta")
+    .maybeSingle<OrgCredentialRow>();
+
+  return data ? toMetaCredentials(data) : undefined;
+}
+
+/**
+ * The credentials for the org an inbound webhook is addressed to. Returns
+ * undefined when the account is not connected here, which is what makes an
+ * unmatched webhook fail verification instead of being checked against some
+ * other tenant's secret.
+ */
+export async function getMetaCredentialsForEvent(
+  db: Db,
+  platform: Platform,
+  accountId?: string
+): Promise<(MetaCredentials & { orgId: string }) | undefined> {
+  const orgId = await findOrgIdForEvent(db, platform, accountId);
+  if (!orgId) {
+    return undefined;
+  }
+
+  const credentials = await getStoredMetaCredentials(db, orgId);
+  return credentials ? { ...credentials, orgId } : undefined;
+}
+
+/** The organization that owns the channel a webhook event addresses. */
+export async function findOrgIdForEvent(
+  db: Db,
+  platform: Platform,
+  accountId?: string
+): Promise<string | undefined> {
+  const channel = await findChannelForEvent(db, platform, accountId);
+  return channel?.orgId;
+}
+
+/**
+ * Every stored Meta verify token, for the `hub.challenge` handshake.
+ *
+ * Meta's verification GET carries no account id, so when the callback URL does
+ * not name an organization there is nothing to route on and the presented token
+ * has to be matched against each tenant's. Echoing the challenge back grants
+ * nothing on its own — inbound events are still rejected unless they carry a
+ * signature from that org's app secret.
+ */
+export async function listStoredMetaVerifyTokens(db: Db): Promise<string[]> {
+  if (!db) {
+    return [];
+  }
+
+  const { data } = await db
+    .from("org_credentials")
+    .select("verify_token_encrypted")
+    .eq("provider", "meta")
+    .not("verify_token_encrypted", "is", null)
+    .limit(500);
+
+  return (data ?? [])
+    .map(row => readSecret((row as { verify_token_encrypted: string | null }).verify_token_encrypted))
+    .filter((token): token is string => Boolean(token));
+}
+
+export type MetaCredentialsInput = {
+  orgId: string;
+  updatedBy?: string | null;
+  appId?: string;
+  /** Omitted leaves the stored secret untouched; empty string clears it. */
+  appSecret?: string;
+  verifyToken?: string;
+  instagramAppSecret?: string;
+};
+
+/**
+ * Creates or updates an org's Meta app credentials.
+ *
+ * Secrets are only written when the form actually supplied one, so re-saving
+ * the app id does not wipe a secret the admin cannot see to retype. Passing an
+ * empty string is the explicit "remove this" signal.
+ */
+export async function saveStoredMetaCredentials(db: Db, input: MetaCredentialsInput) {
+  if (!db) {
+    throw new Error("Supabase is not configured, so credentials cannot be saved.");
+  }
+
+  const row: Record<string, unknown> = {
+    updated_by: input.updatedBy ?? null,
+    updated_at: new Date().toISOString()
+  };
+
+  if (input.appId !== undefined) {
+    row.app_id = input.appId || null;
+  }
+  if (input.appSecret !== undefined) {
+    row.app_secret_encrypted = input.appSecret ? encryptSecret(input.appSecret) : null;
+  }
+  if (input.verifyToken !== undefined) {
+    row.verify_token_encrypted = input.verifyToken ? encryptSecret(input.verifyToken) : null;
+  }
+  if (input.instagramAppSecret !== undefined) {
+    row.instagram_app_secret_encrypted = input.instagramAppSecret
+      ? encryptSecret(input.instagramAppSecret)
+      : null;
+  }
+
+  const existing = await db
+    .from("org_credentials")
+    .select("id")
+    .eq("org_id", input.orgId)
+    .eq("provider", "meta")
+    .maybeSingle<{ id: string }>();
+
+  // `org_id` and `provider` identify the row and are not in the update grant,
+  // so they are only ever sent on insert.
+  const { error } = existing.data
+    ? await db.from("org_credentials").update(row).eq("id", existing.data.id)
+    : await db
+        .from("org_credentials")
+        .insert({ ...row, org_id: input.orgId, provider: "meta" });
+
+  if (error) {
+    throw new Error(error.message);
+  }
+}
+
+export async function clearStoredMetaCredentials(db: Db, orgId: string) {
+  if (!db) {
+    return;
+  }
+
+  const { error } = await db
+    .from("org_credentials")
+    .delete()
+    .eq("org_id", orgId)
+    .eq("provider", "meta");
+
+  if (error) {
+    throw new Error(error.message);
+  }
 }

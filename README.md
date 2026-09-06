@@ -14,6 +14,7 @@ Built from the specification in [`docs/base.md`](docs/base.md).
 - [Setup](#setup)
 - [Environment variables](#environment-variables)
 - [Database setup](#database-setup)
+- [Workspace credentials](#workspace-credentials)
 - [Connecting channels](#connecting-channels)
 - [Receiving messages: webhooks](#receiving-messages-webhooks)
 - [Platform setup guides](#platform-setup-guides) — every platform end to end
@@ -33,6 +34,7 @@ Built from the specification in [`docs/base.md`](docs/base.md).
 - **Multi-tenant from day one.** Every row is scoped to an organization, enforced by Postgres row-level security.
 - **Roles.** Admins manage the workspace, agents answer messages, viewers read and report.
 - **Credentials encrypted at rest.** Platform tokens are AES-256-GCM encrypted and unreadable to anyone but the server.
+- **Each workspace brings its own Meta app.** App id, secret, and verify token are entered in the dashboard, not the environment, so one deployment serves many tenants.
 
 ---
 
@@ -55,6 +57,7 @@ Afterwards, sign in at `/login`. Sessions persist; sign out from the button next
 | See the inbox | all conversations | assigned + unassigned-and-open | all conversations |
 | Send replies | ✅ | ✅ | ❌ |
 | Connect / manage channels | ✅ | ❌ | ❌ |
+| Manage workspace credentials | ✅ | ❌ | ❌ |
 | Invite people, change roles | ✅ | ❌ | ❌ |
 | View analytics | ✅ | ❌ | ✅ |
 
@@ -63,10 +66,11 @@ Navigation is filtered by role, so agents never see admin destinations at all.
 ### For admins: first-run checklist
 
 1. **Sign up** at `/signup` — this creates the workspace.
-2. **Connect a channel** at `/admin/channels`. See [Connecting channels](#connecting-channels). Nothing arrives in the inbox until at least one channel exists.
-3. **Point the platform's webhook** at your app. The in-app **Setup guide** (`/setup`) and [Platform setup guides](#platform-setup-guides) walk through every platform one click at a time. This is the step people forget — a connected channel with no webhook stays silent forever.
-4. **Send yourself a test message** from a real account on that platform. It should appear in `/inbox` within a second or two.
-5. **Invite your team** at `/admin/agents`.
+2. **Add your Meta app** at `/admin/credentials`, if you are connecting Messenger, Instagram, or WhatsApp. See [Workspace credentials](#workspace-credentials). LINE and Telegram skip this.
+3. **Connect a channel** at `/admin/channels`. See [Connecting channels](#connecting-channels). Nothing arrives in the inbox until at least one channel exists.
+4. **Point the platform's webhook** at your app. The in-app **Setup guide** (`/setup`) and [Platform setup guides](#platform-setup-guides) walk through every platform one click at a time. This is the step people forget — a connected channel with no webhook stays silent forever.
+5. **Send yourself a test message** from a real account on that platform. It should appear in `/inbox` within a second or two.
+6. **Invite your team** at `/admin/agents`.
 
 ### For admins: inviting your team
 
@@ -123,7 +127,7 @@ The pill in the top-right shows the realtime connection: **live**, **connecting*
 ```
 app/
   (auth)/          login, signup, join/[token] — the only public pages
-  admin/           channels, agents, analytics (admin/viewer only)
+  admin/           channels, credentials, analytics (admin/viewer only)
   inbox/           the agent inbox
   setup/           illustrated per-platform setup guide (all roles)
   api/
@@ -136,6 +140,7 @@ components/
 lib/
   adapters/        per-platform integrations (see below)
   auth.ts          session + role guards
+  meta-app.ts      resolves which org's Meta app a request belongs to
   store.ts         every database query
   crypto.ts        AES-256-GCM for stored credentials
   webhooks.ts      shared inbound pipeline
@@ -222,15 +227,15 @@ Copy `.env.example` to `.env.local`. It is gitignored, along with `.env.*`.
 
 ### Meta — Messenger, Instagram, WhatsApp
 
-One Meta app covers all three.
+**None of these are required.** Each workspace enters its own Meta app at `/admin/credentials` — see [Workspace credentials](#workspace-credentials). Set them only to provide a house app that workspaces fall back to when they have not saved their own; a workspace's own values always win.
 
 | Variable | Required | Purpose |
 | --- | --- | --- |
-| `META_APP_ID` | for OAuth connect | Meta app id. |
-| `META_APP_SECRET` | yes, for any Meta channel | Signs every webhook. **Without it all Meta webhooks are rejected.** |
-| `META_VERIFY_TOKEN` | yes | Any string you choose; paste the same value into Meta's webhook dialog. |
-| `INSTAGRAM_APP_SECRET` | only for Instagram Login | The Instagram-Login product signs its webhooks with its own app secret. |
-| `META_GRAPH_API_VERSION` | recommended | Defaults to `v26.0`, the newest version `graph.facebook.com` recognizes. |
+| `META_APP_ID` | no | Fallback Meta app id. |
+| `META_APP_SECRET` | no | Fallback webhook signing secret. |
+| `META_VERIFY_TOKEN` | no | Fallback verify token. |
+| `INSTAGRAM_APP_SECRET` | no | Fallback secret for the Instagram-Login product's webhooks. |
+| `META_GRAPH_API_VERSION` | recommended | Deployment-wide. Defaults to `v26.0`, the newest version `graph.facebook.com` recognizes. |
 | `WHATSAPP_VERIFY_TOKEN` | no | Separate WhatsApp verify token; falls back to `META_VERIFY_TOKEN`. |
 
 ### LINE
@@ -239,7 +244,7 @@ One Meta app covers all three.
 | --- | --- | --- |
 | `LINE_CHANNEL_SECRET` | no | Single-account fallback for validating `X-Line-Signature` when the channel row stores no secret of its own. |
 
-**Per-tenant credentials live in the database, not in env vars.** Access tokens (Meta Pages, WhatsApp numbers, LINE bots, Telegram bots) and webhook secrets are stored encrypted on each channel row, entered when the channel is connected at `/admin/channels`. The env vars above are operator-level only: they identify *your* app, never a tenant's account.
+**Per-tenant credentials live in the database, not in env vars.** Access tokens (Meta Pages, WhatsApp numbers, LINE bots, Telegram bots) and webhook secrets are stored encrypted on each channel row, entered when the channel is connected at `/admin/channels`. Meta app credentials are stored the same way, per organization, at `/admin/credentials`.
 
 ---
 
@@ -270,6 +275,36 @@ Worth knowing if you are adapting `rls.sql`:
 1. **Infinite recursion.** `current_org_id()` reads `org_users`, and the policy on `org_users` calls it — so the lookup was subject to the policy that invoked it. Postgres aborts with *infinite recursion detected in policy for relation org_users*. The helpers now run as `SECURITY DEFINER` with a pinned `search_path`.
 
 2. **`FOR ALL` silently granted `SELECT`.** Permissive policies are OR'd together, so `"admins and agents can manage conversations" FOR ALL` gave every agent read access to *every* conversation in the org — making the carefully written visibility rule directly above it dead code. Reads and writes are now separate policies.
+
+---
+
+## Workspace credentials
+
+`/admin/credentials`, admins only.
+
+Messenger, Instagram, and WhatsApp all authorize through a **Meta developer app**. Meta issues one app per developer account, and its secret signs every webhook it sends — so the app is per customer, not per deployment. Keeping it in env vars meant one deployment per customer.
+
+Each workspace now enters its own at `/admin/credentials`:
+
+| Field | Where it comes from |
+| --- | --- |
+| App ID | Meta dashboard → App settings → Basic |
+| App secret | Same page, behind **Show**. Encrypted before storage, never shown back |
+| Verify token | Any string the admin invents; the same value goes into Meta's webhook dialog |
+| Instagram app secret | Optional, only for Instagram API with Instagram Login |
+
+The app id and secret are checked against Meta (`oauth/access_token` with `grant_type=client_credentials`) before they are saved, so a typo surfaces on the form rather than halfway through an OAuth redirect.
+
+### How a webhook finds the right app
+
+Meta signs every delivery with the app secret, and the request has to be verified before anything is ingested — so the organization has to be resolved first, from untrusted input. Two mechanisms, tried in order:
+
+1. **`?org=<org-id>` on the callback URL.** The credentials page and the setup guide hand out URLs that already carry it. This is the only thing available on Meta's `hub.challenge` GET, which carries no account id.
+2. **The account id in the payload** — `entry[].id` for Messenger and Instagram, `phone_number_id` for WhatsApp — resolved to a channel, and from there to its organization.
+
+The payload is then verified **only** against that organization's secret. One tenant signing a payload that names another tenant's Page id is rejected, which is the property the old single-secret check could not express.
+
+If no workspace credentials are found, the deployment's env vars are used. That is what keeps a single-tenant install working with no dashboard entry at all, and what keeps channels connected before this change from breaking.
 
 ---
 

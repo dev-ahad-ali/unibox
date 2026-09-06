@@ -6,7 +6,8 @@ import { PlatformIcon, platformLabel } from "@/components/platform-badge";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { StatusDot } from "@/components/ui/status-dot";
-import { metaConfigured, metaRedirectUri } from "@/lib/adapters/meta-connect";
+import { metaRedirectUri } from "@/lib/adapters/meta-connect";
+import { isMetaConfigured } from "@/lib/meta-app";
 import { requireRole } from "@/lib/auth";
 import { isEncryptionConfigured } from "@/lib/crypto";
 import { getChannelHealth, getInboxLists } from "@/lib/store";
@@ -36,9 +37,10 @@ export default async function ChannelsPage({
   const errorMessage = getParam(params.error);
   const connectedMessage = getParam(params.connected);
 
-  const [snapshot, health] = await Promise.all([
+  const [snapshot, health, metaConfigured] = await Promise.all([
     getInboxLists(db, member.orgId),
-    getChannelHealth(db, member.orgId)
+    getChannelHealth(db, member.orgId),
+    isMetaConfigured(member.orgId)
   ]);
   const connected = new Set(snapshot.channels.map(channel => channel.platform));
   const channelsWithMessages = new Set(
@@ -93,7 +95,7 @@ export default async function ChannelsPage({
             </CardDescription>
           </CardHeader>
           <CardContent>
-            <ConnectMetaButton configured={metaConfigured()} />
+            <ConnectMetaButton configured={metaConfigured} />
             <p className="mt-3 text-[11px] leading-relaxed text-muted-foreground">
               Add this as a Valid OAuth Redirect URI in the Meta app dashboard:{" "}
               <code className="break-all">{metaRedirectUri()}</code>
