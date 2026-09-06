@@ -10,141 +10,150 @@ import { cn } from "@/lib/utils";
 import type { Role } from "@/lib/types";
 
 const NAV = [
-  { href: "/inbox", label: "Inbox", Icon: Inbox, roles: ["admin", "agent", "viewer"] },
-  // Highlighted: it is the first stop for a new workspace, and the one entry a
-  // first-time admin should notice before they open Channels.
-  { href: "/setup", label: "Setup guide", Icon: Compass, roles: ["admin", "agent", "viewer"], highlight: true },
-  { href: "/admin/channels", label: "Channels", Icon: Radio, roles: ["admin"] },
-  { href: "/admin/agents", label: "Agents", Icon: Users, roles: ["admin"] },
-  { href: "/admin/analytics", label: "Analytics", Icon: BarChart3, roles: ["admin", "viewer"] }
+    { href: "/inbox", label: "Inbox", Icon: Inbox, roles: ["admin", "agent", "viewer"] },
+    // Highlighted: it is the first stop for a new workspace, and the one entry a
+    // first-time admin should notice before they open Channels.
+    {
+        href: "/setup",
+        label: "Setup guide",
+        Icon: Compass,
+        roles: ["admin", "agent", "viewer"],
+        highlight: true,
+    },
+    { href: "/admin/channels", label: "Channels", Icon: Radio, roles: ["admin"] },
+    // { href: "/admin/agents", label: "Agents", Icon: Users, roles: ["admin"] },
+    { href: "/admin/analytics", label: "Analytics", Icon: BarChart3, roles: ["admin", "viewer"] },
 ] as const satisfies ReadonlyArray<{
-  href: string;
-  label: string;
-  Icon: typeof Inbox;
-  roles: readonly Role[];
-  highlight?: boolean;
+    href: string;
+    label: string;
+    Icon: typeof Inbox;
+    roles: readonly Role[];
+    highlight?: boolean;
 }>;
 
 export function AppShell({
-  title,
-  subtitle,
-  actions,
-  active,
-  fullBleed = false,
-  viewer,
-  children
+    title,
+    subtitle,
+    actions,
+    active,
+    fullBleed = false,
+    viewer,
+    children,
 }: Readonly<{
-  title: string;
-  subtitle?: string;
-  actions?: ReactNode;
-  /** Path of the nav entry to highlight. */
-  active?: string;
-  /** Inbox uses the full viewport height; content pages scroll normally. */
-  fullBleed?: boolean;
-  viewer: { displayName: string; role: Role; organizationName: string; isDemo: boolean };
-  children: ReactNode;
+    title: string;
+    subtitle?: string;
+    actions?: ReactNode;
+    /** Path of the nav entry to highlight. */
+    active?: string;
+    /** Inbox uses the full viewport height; content pages scroll normally. */
+    fullBleed?: boolean;
+    viewer: { displayName: string; role: Role; organizationName: string; isDemo: boolean };
+    children: ReactNode;
 }>) {
-  // Nav is filtered by role so agents never see admin destinations. The pages
-  // themselves re-check the role — hiding a link is presentation, not access
-  // control.
-  const nav = NAV.filter(entry => (entry.roles as readonly Role[]).includes(viewer.role));
+    // Nav is filtered by role so agents never see admin destinations. The pages
+    // themselves re-check the role — hiding a link is presentation, not access
+    // control.
+    const nav = NAV.filter((entry) => (entry.roles as readonly Role[]).includes(viewer.role));
 
-  return (
-    <div className="flex h-dvh w-full overflow-hidden bg-background">
-      <nav className="hidden w-52 shrink-0 flex-col border-r border-sidebar-border bg-sidebar text-sidebar-foreground md:flex">
-        <Link href="/" className="flex h-14 items-center gap-2 border-b border-sidebar-border px-4">
-          <span className="size-2 rounded-full bg-primary" aria-hidden />
-          <span className="truncate text-sm font-semibold tracking-tight">
-            {viewer.organizationName || "Unibox"}
-          </span>
-        </Link>
-
-        <div className="flex flex-col gap-0.5 p-2">
-          {nav.map(entry => {
-            const { href, label, Icon } = entry;
-            const highlight = "highlight" in entry && entry.highlight;
-            const isActive = active === href;
-            return (
-              <Link
-                key={href}
-                href={href}
-                aria-current={isActive ? "page" : undefined}
-                className={cn(
-                  "flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm transition-colors",
-                  isActive
-                    ? "bg-sidebar-primary font-medium text-sidebar-primary-foreground shadow-xs"
-                    : highlight
-                      ? "bg-sidebar-primary/10 font-medium text-sidebar-primary ring-1 ring-sidebar-primary/25 hover:bg-sidebar-primary/20"
-                      : "text-muted-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
-                )}
-              >
-                <Icon className="size-4" aria-hidden />
-                <span className="flex-1">{label}</span>
-                {highlight && !isActive ? (
-                  <span className="rounded-full bg-sidebar-primary px-1.5 py-px text-[9px] font-semibold uppercase tracking-wide text-sidebar-primary-foreground">
-                    start
-                  </span>
-                ) : null}
-              </Link>
-            );
-          })}
-        </div>
-
-        <div className="mt-auto border-t border-sidebar-border p-3">
-          {viewer.isDemo ? (
-            <p className="mb-2 rounded-md border border-warning/30 bg-warning/10 px-2 py-1.5 text-[11px] leading-snug text-warning">
-              Demo mode — no Supabase project configured, so nobody is signed in.
-            </p>
-          ) : null}
-
-          <div className="flex items-center gap-2">
-            <Avatar className="size-7">
-              <AvatarFallback className="text-[10px]">
-                {initials(viewer.displayName)}
-              </AvatarFallback>
-            </Avatar>
-            <div className="min-w-0 flex-1">
-              <div className="truncate text-xs font-medium">{viewer.displayName}</div>
-              <div className="text-[11px] text-muted-foreground">{viewer.role}</div>
-            </div>
-            {viewer.isDemo ? null : (
-              <form action={signOut}>
-                <Button
-                  type="submit"
-                  variant="ghost"
-                  size="icon"
-                  className="size-7"
-                  aria-label="Sign out"
-                  title="Sign out"
+    return (
+        <div className="flex h-dvh w-full overflow-hidden bg-background">
+            <nav className="hidden w-52 shrink-0 flex-col border-r border-sidebar-border bg-sidebar text-sidebar-foreground md:flex">
+                <Link
+                    href="/"
+                    className="flex h-14 items-center gap-2 border-b border-sidebar-border px-4"
                 >
-                  <LogOut />
-                </Button>
-              </form>
-            )}
-          </div>
+                    <span className="size-2 rounded-full bg-primary" aria-hidden />
+                    <span className="truncate text-sm font-semibold tracking-tight">
+                        {viewer.organizationName || "Unibox"}
+                    </span>
+                </Link>
+
+                <div className="flex flex-col gap-0.5 p-2">
+                    {nav.map((entry) => {
+                        const { href, label, Icon } = entry;
+                        const highlight = "highlight" in entry && entry.highlight;
+                        const isActive = active === href;
+                        return (
+                            <Link
+                                key={href}
+                                href={href}
+                                aria-current={isActive ? "page" : undefined}
+                                className={cn(
+                                    "flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm transition-colors",
+                                    isActive
+                                        ? "bg-sidebar-primary font-medium text-sidebar-primary-foreground shadow-xs"
+                                        : highlight
+                                          ? "bg-sidebar-primary/10 font-medium text-sidebar-primary ring-1 ring-sidebar-primary/25 hover:bg-sidebar-primary/20"
+                                          : "text-muted-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground",
+                                )}
+                            >
+                                <Icon className="size-4" aria-hidden />
+                                <span className="flex-1">{label}</span>
+                                {highlight && !isActive ? (
+                                    <span className="rounded-full bg-sidebar-primary px-1.5 py-px text-[9px] font-semibold uppercase tracking-wide text-sidebar-primary-foreground">
+                                        start
+                                    </span>
+                                ) : null}
+                            </Link>
+                        );
+                    })}
+                </div>
+
+                <div className="mt-auto border-t border-sidebar-border p-3">
+                    {viewer.isDemo ? (
+                        <p className="mb-2 rounded-md border border-warning/30 bg-warning/10 px-2 py-1.5 text-[11px] leading-snug text-warning">
+                            Demo mode — no Supabase project configured, so nobody is signed in.
+                        </p>
+                    ) : null}
+
+                    <div className="flex items-center gap-2">
+                        <Avatar className="size-7">
+                            <AvatarFallback className="text-[10px]">
+                                {initials(viewer.displayName)}
+                            </AvatarFallback>
+                        </Avatar>
+                        <div className="min-w-0 flex-1">
+                            <div className="truncate text-xs font-medium">{viewer.displayName}</div>
+                            <div className="text-[11px] text-muted-foreground">{viewer.role}</div>
+                        </div>
+                        {viewer.isDemo ? null : (
+                            <form action={signOut}>
+                                <Button
+                                    type="submit"
+                                    variant="ghost"
+                                    size="icon"
+                                    className="size-7"
+                                    aria-label="Sign out"
+                                    title="Sign out"
+                                >
+                                    <LogOut />
+                                </Button>
+                            </form>
+                        )}
+                    </div>
+                </div>
+            </nav>
+
+            <div className="flex min-w-0 flex-1 flex-col">
+                <header className="flex h-14 shrink-0 items-center justify-between gap-4 border-b border-border px-4 md:px-6">
+                    <div className="min-w-0">
+                        <h1 className="truncate text-sm font-semibold tracking-tight">{title}</h1>
+                        {subtitle ? (
+                            <p className="truncate text-xs text-muted-foreground">{subtitle}</p>
+                        ) : null}
+                    </div>
+                    <div className="flex shrink-0 items-center gap-2">{actions}</div>
+                </header>
+
+                <main
+                    className={cn(
+                        "min-h-0 flex-1",
+                        fullBleed ? "overflow-hidden" : "scrollbar-slim overflow-y-auto p-4 md:p-6",
+                    )}
+                >
+                    {children}
+                </main>
+            </div>
         </div>
-      </nav>
-
-      <div className="flex min-w-0 flex-1 flex-col">
-        <header className="flex h-14 shrink-0 items-center justify-between gap-4 border-b border-border px-4 md:px-6">
-          <div className="min-w-0">
-            <h1 className="truncate text-sm font-semibold tracking-tight">{title}</h1>
-            {subtitle ? (
-              <p className="truncate text-xs text-muted-foreground">{subtitle}</p>
-            ) : null}
-          </div>
-          <div className="flex shrink-0 items-center gap-2">{actions}</div>
-        </header>
-
-        <main
-          className={cn(
-            "min-h-0 flex-1",
-            fullBleed ? "overflow-hidden" : "scrollbar-slim overflow-y-auto p-4 md:p-6"
-          )}
-        >
-          {children}
-        </main>
-      </div>
-    </div>
-  );
+    );
 }
