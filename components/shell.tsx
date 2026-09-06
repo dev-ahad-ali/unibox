@@ -1,6 +1,6 @@
 import Link from "next/link";
 import type { ReactNode } from "react";
-import { BarChart3, Inbox, LogOut, Radio, Users } from "lucide-react";
+import { BarChart3, Compass, Inbox, LogOut, Radio, Users } from "lucide-react";
 
 import { signOut } from "@/app/(auth)/login/actions";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
@@ -11,6 +11,9 @@ import type { Role } from "@/lib/types";
 
 const NAV = [
   { href: "/inbox", label: "Inbox", Icon: Inbox, roles: ["admin", "agent", "viewer"] },
+  // Highlighted: it is the first stop for a new workspace, and the one entry a
+  // first-time admin should notice before they open Channels.
+  { href: "/setup", label: "Setup guide", Icon: Compass, roles: ["admin", "agent", "viewer"], highlight: true },
   { href: "/admin/channels", label: "Channels", Icon: Radio, roles: ["admin"] },
   { href: "/admin/agents", label: "Agents", Icon: Users, roles: ["admin"] },
   { href: "/admin/analytics", label: "Analytics", Icon: BarChart3, roles: ["admin", "viewer"] }
@@ -19,6 +22,7 @@ const NAV = [
   label: string;
   Icon: typeof Inbox;
   roles: readonly Role[];
+  highlight?: boolean;
 }>;
 
 export function AppShell({
@@ -47,8 +51,8 @@ export function AppShell({
 
   return (
     <div className="flex h-dvh w-full overflow-hidden bg-background">
-      <nav className="hidden w-52 shrink-0 flex-col border-r border-border bg-card md:flex">
-        <Link href="/" className="flex h-14 items-center gap-2 border-b border-border px-4">
+      <nav className="hidden w-52 shrink-0 flex-col border-r border-sidebar-border bg-sidebar text-sidebar-foreground md:flex">
+        <Link href="/" className="flex h-14 items-center gap-2 border-b border-sidebar-border px-4">
           <span className="size-2 rounded-full bg-primary" aria-hidden />
           <span className="truncate text-sm font-semibold tracking-tight">
             {viewer.organizationName || "Unibox"}
@@ -56,25 +60,37 @@ export function AppShell({
         </Link>
 
         <div className="flex flex-col gap-0.5 p-2">
-          {nav.map(({ href, label, Icon }) => (
-            <Link
-              key={href}
-              href={href}
-              aria-current={active === href ? "page" : undefined}
-              className={cn(
-                "flex items-center gap-2.5 rounded-md px-2.5 py-2 text-sm transition-colors",
-                active === href
-                  ? "bg-secondary font-medium text-foreground"
-                  : "text-muted-foreground hover:bg-secondary/60 hover:text-foreground"
-              )}
-            >
-              <Icon className="size-4" aria-hidden />
-              {label}
-            </Link>
-          ))}
+          {nav.map(entry => {
+            const { href, label, Icon } = entry;
+            const highlight = "highlight" in entry && entry.highlight;
+            const isActive = active === href;
+            return (
+              <Link
+                key={href}
+                href={href}
+                aria-current={isActive ? "page" : undefined}
+                className={cn(
+                  "flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm transition-colors",
+                  isActive
+                    ? "bg-sidebar-primary font-medium text-sidebar-primary-foreground shadow-xs"
+                    : highlight
+                      ? "bg-sidebar-primary/10 font-medium text-sidebar-primary ring-1 ring-sidebar-primary/25 hover:bg-sidebar-primary/20"
+                      : "text-muted-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
+                )}
+              >
+                <Icon className="size-4" aria-hidden />
+                <span className="flex-1">{label}</span>
+                {highlight && !isActive ? (
+                  <span className="rounded-full bg-sidebar-primary px-1.5 py-px text-[9px] font-semibold uppercase tracking-wide text-sidebar-primary-foreground">
+                    start
+                  </span>
+                ) : null}
+              </Link>
+            );
+          })}
         </div>
 
-        <div className="mt-auto border-t border-border p-3">
+        <div className="mt-auto border-t border-sidebar-border p-3">
           {viewer.isDemo ? (
             <p className="mb-2 rounded-md border border-warning/30 bg-warning/10 px-2 py-1.5 text-[11px] leading-snug text-warning">
               Demo mode — no Supabase project configured, so nobody is signed in.

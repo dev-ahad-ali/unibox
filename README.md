@@ -16,7 +16,7 @@ Built from the specification in [`docs/base.md`](docs/base.md).
 - [Database setup](#database-setup)
 - [Connecting channels](#connecting-channels)
 - [Receiving messages: webhooks](#receiving-messages-webhooks)
-- [Platform setup guides](#platform-setup-guides) — Messenger, WhatsApp, and LINE end to end
+- [Platform setup guides](#platform-setup-guides) — every platform end to end
 - [Sending messages](#sending-messages)
 - [Security model](#security-model)
 - [Troubleshooting](#troubleshooting)
@@ -64,7 +64,7 @@ Navigation is filtered by role, so agents never see admin destinations at all.
 
 1. **Sign up** at `/signup` — this creates the workspace.
 2. **Connect a channel** at `/admin/channels`. See [Connecting channels](#connecting-channels). Nothing arrives in the inbox until at least one channel exists.
-3. **Point the platform's webhook** at your app. [Platform setup guides](#platform-setup-guides) walks through Messenger, WhatsApp, and LINE one click at a time. This is the step people forget — a connected channel with no webhook stays silent forever.
+3. **Point the platform's webhook** at your app. The in-app **Setup guide** (`/setup`) and [Platform setup guides](#platform-setup-guides) walk through every platform one click at a time. This is the step people forget — a connected channel with no webhook stays silent forever.
 4. **Send yourself a test message** from a real account on that platform. It should appear in `/inbox` within a second or two.
 5. **Invite your team** at `/admin/agents`.
 
@@ -82,13 +82,13 @@ The same page lists current members — change someone's role from the dropdown 
 
 **Left — the queue.** Every conversation, newest activity first. Each row shows the contact, the platform icon, and a status dot. Two filter rows sit above it: status (All / Open / Pending / Closed) and channel (All / Messenger / Instagram / WhatsApp / LINE). Filters combine, and they live in the URL — so a filtered view is a bookmarkable, shareable link.
 
-**Centre — the thread.** Full history with the customer, oldest at top. Your team's replies are the lime bubbles on the right; the customer's are bordered on the left. Each message shows its timestamp and delivery state (`sent` → `delivered` → `read`, or `failed`).
+**Centre — the thread.** Full history with the customer, oldest at top. Your team's replies are the indigo bubbles on the right; the customer's are bordered on the left. Each message shows its timestamp and delivery state (`sent` → `delivered` → `read`, or `failed`).
 
 **Right — context.** Contact name and platform id, which channel it came in on, who it is assigned to, when the customer last wrote, and any internal notes. Notes are staff-only and are never sent to the customer.
 
 **Replying.** Type in the box at the bottom. **Enter sends, Shift+Enter adds a line.** If the platform rejects the message, the error is shown and *no message bubble is added* — you will never see a reply that looks delivered but never arrived.
 
-**The status dot** means: lime = open, amber = pending, grey = closed.
+**The status dot** means: indigo = open, amber = pending, grey = closed.
 
 ### The WhatsApp 24-hour window
 
@@ -115,7 +115,7 @@ The pill in the top-right shows the realtime connection: **live**, **connecting*
 | Database | Supabase Postgres, with row-level security |
 | Auth | Supabase Auth (email + password), cookie sessions via `@supabase/ssr` |
 | Realtime | Socket.io on a custom Node server (`server.js`) |
-| UI | Tailwind CSS v4 + shadcn/ui, black and lime theme, dark by default |
+| UI | Tailwind CSS v4 + shadcn/ui, warm neutral + indigo theme (Plus Jakarta Sans), dark by default |
 | Language | TypeScript, strict |
 
 ### Layout
@@ -125,6 +125,7 @@ app/
   (auth)/          login, signup, join/[token] — the only public pages
   admin/           channels, agents, analytics (admin/viewer only)
   inbox/           the agent inbox
+  setup/           illustrated per-platform setup guide (all roles)
   api/
     webhooks/      one route per platform — signature-authenticated
     send-message/  outbound replies
@@ -362,6 +363,8 @@ Messenger and Instagram echo events (`message.is_echo`) are dropped: they are yo
 
 ## Platform setup guides
 
+The same material lives inside the app at **`/setup`** (the highlighted "Setup guide" entry in the sidebar), with illustrations, copy buttons for this deployment's webhook URLs, and per-platform troubleshooting. Point new admins there first.
+
 Each guide takes one platform from nothing to a message appearing in `/inbox`. They assume the app is already deployed and `NEXT_PUBLIC_APP_URL` points at it. Substitute your own URL wherever `<APP_URL>` appears.
 
 Every platform needs the same four things to line up. Most setup failures are one of them missing:
@@ -427,10 +430,10 @@ curl "https://graph.facebook.com/v26.0/<PAGE_ID>/subscribed_apps" \
 
 **1. Collect the values.** From **WhatsApp → API Setup** (or **Use cases → Connect with customers through WhatsApp → Customize → Test settings** in the newer layout):
 
-| Value on the page | Environment variable |
+| Value on the page | Where it goes |
 | --- | --- |
-| Phone number ID, the numeric id under the test number | `WHATSAPP_PHONE_NUMBER_ID` |
-| Temporary access token | `WHATSAPP_ACCESS_TOKEN` |
+| Phone number ID, the numeric id under the test number | Account id in the connect form |
+| Temporary access token | Access token in the connect form (stored encrypted) |
 | WhatsApp Business Account ID | not stored, needed for the curl below |
 
 `META_APP_ID`, `META_APP_SECRET`, and `META_VERIFY_TOKEN` are shared with Messenger. `WHATSAPP_VERIFY_TOKEN` is optional and falls back to `META_VERIFY_TOKEN`.
@@ -477,12 +480,12 @@ Replying inside the 24-hour window is free. Meta charges for business-initiated 
 
 **2. Collect the values.**
 
-| Value | Where | Environment variable |
+| Value | Where | Where it goes |
 | --- | --- | --- |
-| Channel secret | Basic settings tab | `LINE_CHANNEL_SECRET` |
-| Channel access token, long-lived | Messaging API tab, issue one if empty | `LINE_CHANNEL_ACCESS_TOKEN` |
+| Channel secret | Basic settings tab | Channel secret in the connect form (stored encrypted; `LINE_CHANNEL_SECRET` works as a single-account fallback) |
+| Channel access token, long-lived | Messaging API tab, issue one if empty | Access token in the connect form |
 
-`LINE_CHANNEL_SECRET` signs `X-Line-Signature`. Without it the LINE webhook rejects everything, exactly like `META_APP_SECRET` on the Meta routes.
+The channel secret signs `X-Line-Signature`. Without it stored somewhere the LINE webhook rejects everything, exactly like `META_APP_SECRET` on the Meta routes.
 
 **3. Register the webhook.** On the **Messaging API** tab, under Webhook settings:
 

@@ -1,3 +1,5 @@
+import Link from "next/link";
+
 import { AppShell } from "@/components/shell";
 import { ChannelControls, ConnectMetaButton, ManualConnectForm } from "./manage";
 import { PlatformIcon, platformLabel } from "@/components/platform-badge";
@@ -57,6 +59,13 @@ export default async function ChannelsPage({
     >
       <div className="flex max-w-3xl flex-col gap-6">
         <LiveSetupRefresh />
+        <p className="rounded-lg border border-primary/30 bg-primary/5 px-3 py-2 text-xs text-muted-foreground">
+          First time here? The{" "}
+          <Link href="/setup" className="font-medium text-primary underline underline-offset-2">
+            setup guide
+          </Link>{" "}
+          walks through what to do on each platform before pressing connect.
+        </p>
         {connectedMessage ? (
           <p className="rounded-md border border-success/30 bg-success/10 px-3 py-2 text-xs text-success">
             Connected {connectedMessage}.

@@ -12,8 +12,8 @@ function Pulse({ className }: Readonly<{ className?: string }>) {
 export function PageSkeleton({ threePane = false }: Readonly<{ threePane?: boolean }>) {
   return (
     <div className="flex h-dvh w-full overflow-hidden bg-background">
-      <nav className="hidden w-52 shrink-0 flex-col border-r border-border bg-card md:flex">
-        <div className="flex h-14 items-center gap-2 border-b border-border px-4">
+      <nav className="hidden w-52 shrink-0 flex-col border-r border-sidebar-border bg-sidebar md:flex">
+        <div className="flex h-14 items-center gap-2 border-b border-sidebar-border px-4">
           <span className="size-2 rounded-full bg-primary" aria-hidden />
           <Pulse className="h-4 w-24" />
         </div>

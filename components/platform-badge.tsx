@@ -18,7 +18,7 @@ export function platformLabel(platform?: Platform) {
 }
 
 /**
- * Platform marks stay monochrome. Brand colors here would compete with lime,
+ * Platform marks stay monochrome. Brand colors here would compete with the primary,
  * which is reserved for state that needs an agent's attention.
  */
 export function PlatformIcon({
