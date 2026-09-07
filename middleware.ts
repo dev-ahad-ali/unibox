@@ -2,7 +2,9 @@ import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
 
 /** Paths reachable without a session. Everything else requires one. */
-const PUBLIC_PREFIXES = ["/login", "/signup", "/join", "/auth"];
+// `/legal` is published for Meta App Review, which reads the privacy policy,
+// terms, and deletion instructions while signed out.
+const PUBLIC_PREFIXES = ["/login", "/signup", "/join", "/auth", "/legal"];
 /** Auth pages a signed-in user should be bounced away from. */
 const AUTH_ONLY_PREFIXES = ["/login", "/signup"];
 
@@ -76,10 +78,10 @@ export async function middleware(request: NextRequest) {
 export const config = {
   matcher: [
     /*
-     * Everything except static assets and the inbound webhook/health routes.
-     * Webhooks are authenticated by platform signature, not by session — gating
-     * them here would reject every real callback.
+     * Everything except static assets and the routes a platform calls directly.
+     * Webhooks and the data deletion callback are authenticated by signature,
+     * not by session — gating them here would reject every real callback.
      */
-    "/((?!_next/static|_next/image|favicon.ico|api/webhooks|api/health|.*\\.(?:svg|png|jpg|jpeg|gif|webp|ico)$).*)"
+    "/((?!_next/static|_next/image|favicon.ico|api/webhooks|api/data-deletion|api/health|.*\\.(?:svg|png|jpg|jpeg|gif|webp|ico)$).*)"
   ]
 };

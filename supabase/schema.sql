@@ -151,3 +151,23 @@ create table if not exists org_credentials (
 );
 
 create index if not exists idx_org_credentials_org on org_credentials(org_id);
+
+-- Data deletion requests received from Meta's Data Deletion Request Callback.
+-- Meta requires the callback to answer with a confirmation code and a URL where
+-- the person can check on the request, so the code has to outlive the request
+-- that created it. Written and read only by the service role: the status page
+-- is public and looks a row up by its unguessable code, which is the whole
+-- credential — no session is involved.
+create table if not exists deletion_requests (
+  id uuid primary key default gen_random_uuid(),
+  code text not null unique,
+  org_id uuid references organizations(id) on delete cascade,
+  -- App-scoped user id from the signed request. Not a Page-scoped id, so it
+  -- will often match nothing here; that outcome is recorded as 'no_data'.
+  external_user_id text not null,
+  conversations_deleted int not null default 0,
+  status text not null default 'completed' check (status in ('completed', 'no_data')),
+  requested_at timestamptz default now()
+);
+
+create index if not exists idx_deletion_requests_org on deletion_requests(org_id, requested_at desc);

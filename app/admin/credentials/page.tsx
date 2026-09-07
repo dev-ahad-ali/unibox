@@ -8,6 +8,12 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { CopyField } from "@/components/ui/copy-field";
 import { appUrl } from "@/lib/app-url";
 import { META_CALLBACK_PATH } from "@/lib/adapters/meta-connect";
+import {
+  DATA_DELETION_CALLBACK_PATH,
+  DATA_DELETION_PATH,
+  PRIVACY_PATH,
+  TERMS_PATH
+} from "@/lib/legal";
 import { requireRole } from "@/lib/auth";
 import { isEncryptionConfigured } from "@/lib/crypto";
 import { getMetaCredentialsSummary } from "@/lib/meta-app";
@@ -126,6 +132,38 @@ export default async function CredentialsPage({
               label="WhatsApp webhook"
               value={webhookUrl("whatsapp")}
               hint="Subscribe to the messages field — it carries both inbound messages and receipts."
+            />
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>Paste these into App settings &rarr; Basic</CardTitle>
+            <CardDescription>
+              App Review will not start until all four are filled in. The deletion callback is
+              org-scoped like the webhooks, so Meta&apos;s request resolves to this workspace.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="flex flex-col gap-3">
+            <CopyField
+              label="Privacy policy URL"
+              value={appUrl(PRIVACY_PATH)}
+              hint="Names the Meta data Unibox receives and what it is used for."
+            />
+            <CopyField
+              label="Terms of service URL"
+              value={appUrl(TERMS_PATH)}
+              hint="Required alongside the privacy policy before an app can go Live."
+            />
+            <CopyField
+              label="User data deletion — callback URL"
+              value={appUrl(`${DATA_DELETION_CALLBACK_PATH}?org=${member.orgId}`)}
+              hint="Choose 'Data deletion request callback URL' in the dropdown, then paste this."
+            />
+            <CopyField
+              label="User data deletion — instructions URL"
+              value={appUrl(DATA_DELETION_PATH)}
+              hint="The alternative to the callback. Use it only if you pick 'Data deletion instructions URL' instead."
             />
           </CardContent>
         </Card>

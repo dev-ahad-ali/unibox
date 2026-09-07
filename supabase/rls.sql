@@ -378,3 +378,13 @@ on org_credentials
 for delete
 to authenticated
 using (current_org_role() = 'admin' and org_id = current_org_id());
+
+-- ---------------------------------------------------------------------------
+-- deletion_requests
+-- ---------------------------------------------------------------------------
+-- Meta's deletion callback runs with no signed-in user, and the status page it
+-- points at is public. Both go through the service role, which bypasses RLS, so
+-- this table grants nothing to anon or authenticated and carries no policies.
+-- RLS stays enabled to make that denial explicit rather than incidental.
+alter table deletion_requests enable row level security;
+revoke all on deletion_requests from anon, authenticated;

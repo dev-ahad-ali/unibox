@@ -225,6 +225,17 @@ Copy `.env.example` to `.env.local`. It is gitignored, along with `.env.*`.
 
 > **Back up `APP_ENCRYPTION_KEY`.** Lose it and every stored channel token is unrecoverable — you would have to reconnect every channel.
 
+### Published policies
+
+Filled into the privacy policy, terms, and data deletion pages at `/legal/*`. None are required to run, but Meta's App Review reads these pages, so set them before you submit.
+
+| Variable | Required | Purpose |
+| --- | --- | --- |
+| `NEXT_PUBLIC_LEGAL_ENTITY` | for review | Registered business name that publishes the policies. Defaults to `Unibox`. |
+| `NEXT_PUBLIC_LEGAL_ADDRESS` | for review | Postal address. Omitted from the page entirely when unset. |
+| `NEXT_PUBLIC_PRIVACY_EMAIL` | for review | Privacy contact. Defaults to `privacy@<your app domain>`, which is only right if that mailbox exists. |
+| `NEXT_PUBLIC_SUPPORT_EMAIL` | for review | Support contact on the terms page. Defaults to `support@<your app domain>`. |
+
 ### Meta — Messenger, Instagram, WhatsApp
 
 **None of these are required.** Each workspace enters its own Meta app at `/admin/credentials` — see [Workspace credentials](#workspace-credentials). Set them only to provide a house app that workspaces fall back to when they have not saved their own; a workspace's own values always win.

@@ -1525,3 +1525,153 @@ export async function clearStoredMetaCredentials(db: Db, orgId: string) {
     throw new Error(error.message);
   }
 }
+
+/**
+ * Every org's Meta app secrets, paired with the org they belong to.
+ *
+ * Used by the data deletion callback, which receives a `signed_request` and no
+ * organization at all. Finding which secret verifies the signature *is* how the
+ * org is identified, so the caller needs them attributed rather than pooled.
+ */
+export async function listStoredMetaAppSecrets(
+  db: Db
+): Promise<Array<{ orgId: string; secrets: string[] }>> {
+  if (!db) {
+    return [];
+  }
+
+  const { data } = await db
+    .from("org_credentials")
+    .select("org_id, app_secret_encrypted, instagram_app_secret_encrypted")
+    .eq("provider", "meta")
+    .limit(500);
+
+  type SecretRow = Pick<
+    OrgCredentialRow,
+    "org_id" | "app_secret_encrypted" | "instagram_app_secret_encrypted"
+  >;
+
+  return (data ?? [])
+    .map(row => {
+      const { org_id, app_secret_encrypted, instagram_app_secret_encrypted } = row as SecretRow;
+      const secrets = [
+        readSecret(app_secret_encrypted),
+        readSecret(instagram_app_secret_encrypted)
+      ].filter((secret): secret is string => Boolean(secret));
+      return { orgId: org_id, secrets };
+    })
+    .filter(entry => entry.secrets.length > 0);
+}
+
+/**
+ * Deletes the conversations a Meta contact appears in, with their messages and
+ * notes following by cascade.
+ *
+ * Scoped to one org when the signed request identified one. The id Meta sends
+ * is app-scoped rather than Page-scoped, so a zero return is the common case
+ * and means "we hold nothing under this identifier", not a failure.
+ */
+export async function deleteContactData(
+  db: Db,
+  input: Readonly<{ externalUserId: string; orgId?: string }>
+): Promise<number> {
+  if (!db) {
+    return 0;
+  }
+
+  let channelQuery = db
+    .from("channels")
+    .select("id")
+    .in("platform", META_PLATFORMS_FOR_DELETION);
+
+  if (input.orgId) {
+    channelQuery = channelQuery.eq("org_id", input.orgId);
+  }
+
+  const { data: channels } = await channelQuery.limit(1000);
+  const channelIds = (channels ?? []).map(row => (row as { id: string }).id);
+  if (channelIds.length === 0) {
+    return 0;
+  }
+
+  const { data: deleted, error } = await db
+    .from("conversations")
+    .delete()
+    .eq("external_contact_id", input.externalUserId)
+    .in("channel_id", channelIds)
+    .select("id");
+
+  if (error) {
+    throw new Error(error.message);
+  }
+
+  return (deleted ?? []).length;
+}
+
+/** Platforms a Meta deletion request can possibly reach. */
+const META_PLATFORMS_FOR_DELETION = ["messenger", "instagram", "whatsapp"];
+
+export type DeletionRequestRecord = {
+  code: string;
+  orgId?: string;
+  externalUserId: string;
+  conversationsDeleted: number;
+  status: "completed" | "no_data";
+  requestedAt?: string;
+};
+
+type DeletionRequestRow = {
+  code: string;
+  org_id: string | null;
+  external_user_id: string;
+  conversations_deleted: number;
+  status: "completed" | "no_data";
+  requested_at: string | null;
+};
+
+export async function recordDeletionRequest(db: Db, input: DeletionRequestRecord) {
+  if (!db) {
+    return;
+  }
+
+  const { error } = await db.from("deletion_requests").insert({
+    code: input.code,
+    org_id: input.orgId ?? null,
+    external_user_id: input.externalUserId,
+    conversations_deleted: input.conversationsDeleted,
+    status: input.status
+  });
+
+  if (error) {
+    throw new Error(error.message);
+  }
+}
+
+/** Looks a request up by the confirmation code handed back to the requester. */
+export async function findDeletionRequest(
+  db: Db,
+  code: string
+): Promise<DeletionRequestRecord | undefined> {
+  if (!db) {
+    return undefined;
+  }
+
+  const { data } = await db
+    .from("deletion_requests")
+    .select("code, org_id, external_user_id, conversations_deleted, status, requested_at")
+    .eq("code", code)
+    .maybeSingle<DeletionRequestRow>();
+
+  if (!data) {
+    return undefined;
+  }
+
+  return {
+    code: data.code,
+    orgId: data.org_id ?? undefined,
+    externalUserId: data.external_user_id,
+    conversationsDeleted: data.conversations_deleted,
+    status: data.status,
+    requestedAt: data.requested_at ?? undefined
+  };
+}
