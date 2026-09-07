@@ -1,0 +1,237 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Unibox — Meta business verification and App Review</title>
+<style>
+  @page { size: A4; margin: 18mm 16mm 20mm 16mm; }
+  * { box-sizing: border-box; }
+  body {
+    font-family: "Plus Jakarta Sans", "Segoe UI", Helvetica, Arial, sans-serif;
+    font-size: 10.5pt; line-height: 1.55; color: #1c1c1f; margin: 0;
+    -webkit-print-color-adjust: exact; print-color-adjust: exact;
+  }
+  h1 { font-size: 21pt; margin: 0 0 4pt; letter-spacing: -0.4pt; }
+  h2 {
+    font-size: 13pt; margin: 22pt 0 7pt; letter-spacing: -0.2pt;
+    padding-bottom: 4pt; border-bottom: 1px solid #e2e2e6; break-after: avoid;
+  }
+  h3 { font-size: 11pt; margin: 14pt 0 4pt; break-after: avoid; }
+  p { margin: 0 0 7pt; }
+  ul, ol { margin: 0 0 8pt; padding-left: 17pt; }
+  li { margin-bottom: 4pt; }
+  a { color: #4338ca; word-break: break-all; }
+  code {
+    font-family: "Roboto Mono", ui-monospace, Menlo, Consolas, monospace;
+    font-size: 9pt; background: #f2f2f5; padding: 1px 4px; border-radius: 3px;
+  }
+  table { width: 100%; border-collapse: collapse; margin: 6pt 0 10pt; font-size: 9.5pt; }
+  th, td { text-align: left; padding: 5pt 7pt; border: 1px solid #dedee3; vertical-align: top; }
+  th { background: #f4f4f7; font-weight: 600; }
+  .lede { font-size: 11pt; color: #55555e; margin-bottom: 2pt; }
+  .meta { font-size: 8.5pt; color: #77777f; margin-bottom: 18pt; }
+  .box { border: 1px solid #dedee3; border-left: 3px solid #4338ca; background: #f8f8fb;
+         padding: 8pt 11pt; margin: 10pt 0; border-radius: 3px; break-inside: avoid; }
+  .box.warn { border-left-color: #b45309; background: #fdf8f1; }
+  .box.done { border-left-color: #15803d; background: #f3faf5; }
+  .box p:last-child { margin-bottom: 0; }
+  .box strong { display: block; margin-bottom: 3pt; font-size: 10pt; }
+  .owner { font-size: 8.5pt; color: #77777f; text-transform: uppercase;
+           letter-spacing: 0.5pt; font-weight: 600; margin-bottom: 3pt; }
+  .pagebreak { break-before: page; }
+  footer { margin-top: 24pt; padding-top: 8pt; border-top: 1px solid #e2e2e6;
+           font-size: 8.5pt; color: #77777f; }
+</style>
+</head>
+<body>
+
+<h1>Meta business verification and App Review</h1>
+<p class="lede">What Unibox needs to do before one Meta app can serve every customer, who has to do it, and where each step happens.</p>
+<p class="meta">Prepared 7 September 2026 &middot; App: <code>unibox-production-0c27.up.railway.app</code></p>
+
+<h2>The short version</h2>
+<p>Unibox connects to customers' Facebook Pages, Instagram accounts, and WhatsApp numbers. Today every customer has to create their own Meta developer app before they can use it. That is a real drop-off point in onboarding, and removing it is the goal of this work.</p>
+<p>Doing so requires two separate approvals from Meta, which are commonly confused:</p>
+<table>
+  <tr><th style="width:26%">Gate</th><th>What it is</th><th style="width:22%">Who it blocks</th></tr>
+  <tr>
+    <td><strong>Business verification</strong></td>
+    <td>Meta confirms that a real, registered company is behind the app. Documents and a confirmation code, no product review.</td>
+    <td>Prerequisite for the next gate. Nothing else.</td>
+  </tr>
+  <tr>
+    <td><strong>App Review</strong></td>
+    <td>Meta reviews each permission the app requests, with a written use case and a screen recording of the real flow.</td>
+    <td>This is the one that actually unlocks customers.</td>
+  </tr>
+</table>
+<p>Until App Review passes, the app has <strong>Standard Access</strong>: permissions work only for people who hold a role on the app (Admin, Developer, or Tester). Passing it grants <strong>Advanced Access</strong>, which is what lets any customer connect their own Page.</p>
+
+<div class="box warn">
+  <strong>The hard dependency is a registered legal entity</strong>
+  <p>Meta will not verify a personal name or an unregistered side project. Every step below is blocked until we have a company registration document in hand. In most countries a sole proprietorship registration is enough and inexpensive, but the paperwork has to exist before anything else starts.</p>
+</div>
+
+<h2>What is already built</h2>
+<div class="box done">
+  <strong>The application requirements are done</strong>
+  <p>Meta requires four things on the app itself before review will start. All four are now live and reachable without signing in:</p>
+</div>
+<table>
+  <tr><th style="width:34%">Requirement</th><th>Where it is</th></tr>
+  <tr><td>Privacy policy URL</td><td><code>https://unibox-production-0c27.up.railway.app/legal/privacy</code></td></tr>
+  <tr><td>Terms of service URL</td><td><code>https://unibox-production-0c27.up.railway.app/legal/terms</code></td></tr>
+  <tr><td>Data deletion callback</td><td><code>https://unibox-production-0c27.up.railway.app/api/data-deletion?org=&lt;workspace id&gt;</code></td></tr>
+  <tr><td>Data deletion instructions</td><td><code>https://unibox-production-0c27.up.railway.app/legal/data-deletion</code></td></tr>
+  <tr><td>App icon, 1024&times;1024</td><td>Added.</td></tr>
+</table>
+<p>The exact URLs for a given workspace, with the correct id already filled in, are shown in the product at <strong>Credentials &rarr; Paste these into App settings &rarr; Basic</strong>. Copy them from there rather than typing them.</p>
+<p>The privacy policy names the specific Meta data the app receives, which is what reviewers check for. Generic policies get rejected.</p>
+
+<div class="box">
+  <strong>Four values still need to be supplied</strong>
+  <p>The policy pages read these from environment variables on Railway. They currently fall back to defaults, and the defaults will look wrong to a reviewer:</p>
+  <p><code>NEXT_PUBLIC_LEGAL_ENTITY</code>, <code>NEXT_PUBLIC_LEGAL_ADDRESS</code>, <code>NEXT_PUBLIC_PRIVACY_EMAIL</code>, <code>NEXT_PUBLIC_SUPPORT_EMAIL</code>.</p>
+  <p>The two email addresses must be real mailboxes that someone reads. Meta sends test messages to them, and a bounce fails the review.</p>
+</div>
+
+<h2>Step 1 &mdash; Register the business</h2>
+<div class="step">
+  <p class="owner">Owner: founder / legal &middot; Blocks everything downstream</p>
+  <p>Register the company if it does not exist yet, and collect the documents Meta asks for. Two are needed, and they must agree with each other:</p>
+  <ol>
+    <li><strong>Proof the entity exists.</strong> Certificate of incorporation, business licence, or tax registration certificate.</li>
+    <li><strong>Proof of address.</strong> A utility bill, bank statement, or lease dated within the last 12 months.</li>
+  </ol>
+  <p>Also required: a business phone number that can receive a call or SMS, and a website domain the company controls.</p>
+  <div class="box warn">
+    <strong>The most common rejection is a name or address mismatch</strong>
+    <p>The business name entered in Meta must match the registration document character for character, including any suffix such as Ltd, LLC, or Pvt. The address on the proof-of-address document must match the address entered. Check both before submitting.</p>
+  </div>
+</div>
+
+<h2>Step 2 &mdash; Verify the domain</h2>
+<div class="step">
+  <p class="owner">Owner: engineering &middot; 15 minutes, then DNS propagation</p>
+  <p>Go to <a href="https://business.facebook.com/settings/owned-domains">business.facebook.com/settings/owned-domains</a>, or in the UI: <strong>Business settings &rarr; Brand safety and suitability &rarr; Domains</strong>.</p>
+  <p>Add the domain and verify it by one of three methods. Pick whichever is easiest to reach:</p>
+  <ul>
+    <li>A DNS TXT record on the root domain.</li>
+    <li>A <code>&lt;meta&gt;</code> tag in the site's <code>&lt;head&gt;</code>.</li>
+    <li>An HTML file uploaded to the domain root.</li>
+  </ul>
+  <p>The domain should be the company's own, not the Railway subdomain. Domain verification and business verification are separate checks, and both have to pass.</p>
+</div>
+
+<h2>Step 3 &mdash; Submit business verification</h2>
+<div class="step">
+  <p class="owner">Owner: founder / legal &middot; A few business days to review</p>
+  <p>Go to <a href="https://business.facebook.com/settings/security">business.facebook.com/settings/security</a>, or in the UI: <strong>Business settings &rarr; Security Centre &rarr; Start verification</strong>. Note that Meta has renamed Business Manager to "business portfolio", so labels may read slightly differently.</p>
+  <p>The form asks for:</p>
+  <ul>
+    <li>Legal business name, exactly as registered.</li>
+    <li>Business address, phone number, and website.</li>
+    <li>The two documents from Step 1, uploaded.</li>
+    <li>A confirmation code, delivered by phone call, SMS, or to an email address on the verified domain. Choose email if the domain has working mail; it is the least error-prone.</li>
+  </ul>
+  <p>Reference: <a href="https://www.facebook.com/business/help/1095661473946872">facebook.com/business/help/1095661473946872</a></p>
+  <p>If it is rejected, the notice usually names the field that failed. Fix that one thing and resubmit. Rejections are common and are not a judgement on the product.</p>
+</div>
+
+<h2>Step 4 &mdash; Connect the app and fill in App settings</h2>
+<div class="step">
+  <p class="owner">Owner: engineering &middot; 30 minutes</p>
+  <p>In the App Dashboard at <a href="https://developers.facebook.com/apps/">developers.facebook.com/apps</a>, open the app and go to <strong>App settings &rarr; Basic</strong>.</p>
+  <ol>
+    <li>Scroll to <strong>Verified business</strong> and select the portfolio verified in Step 3. Verification does not apply to an app until this link is made.</li>
+    <li>Paste the privacy policy, terms of service, and data deletion URLs from the table on page 1.</li>
+    <li>For data deletion, choose <strong>Data deletion request callback URL</strong> from the dropdown and paste the <code>/api/data-deletion?org=...</code> address. The instructions URL is the alternative if the callback is ever a problem; use one or the other, not both.</li>
+    <li>Set the app category and confirm the icon is present.</li>
+    <li>Switch the app from <strong>Development</strong> to <strong>Live</strong> at the top of the dashboard. Review cannot be submitted while it is in Development.</li>
+  </ol>
+</div>
+
+<h2>Step 5 &mdash; App Review</h2>
+<div class="step">
+  <p class="owner">Owner: engineering + whoever records the demo &middot; 1&ndash;2 weeks per round</p>
+  <p>Go to <strong>App Review &rarr; Permissions and Features</strong>. Each permission has its own <strong>Request Advanced Access</strong> button and is reviewed separately.</p>
+
+  <h3>Permissions to submit</h3>
+  <table>
+    <tr><th style="width:38%">Permission</th><th>What it is for</th></tr>
+    <tr><td><code>pages_show_list</code></td><td>Listing the Pages a customer can connect.</td></tr>
+    <tr><td><code>pages_messaging</code></td><td>Reading and sending Messenger messages.</td></tr>
+    <tr><td><code>pages_manage_metadata</code></td><td>Subscribing the Page to the webhook.</td></tr>
+    <tr><td><code>pages_read_engagement</code></td><td>Reading Page details Instagram messaging depends on.</td></tr>
+    <tr><td><code>instagram_basic</code></td><td>Identifying the connected Instagram professional account.</td></tr>
+    <tr><td><code>instagram_manage_messages</code></td><td>Reading and sending Instagram direct messages.</td></tr>
+  </table>
+  <div class="box">
+    <strong>Two deliberate omissions</strong>
+    <p><code>business_management</code> and the two WhatsApp permissions are <em>not</em> in this submission. See "WhatsApp" below for why. <code>business_management</code> attracts the heaviest scrutiny of anything the app requests, and it is only needed for the WhatsApp onboarding flow we are not building yet. Leaving it out materially improves the odds of a first-round pass.</p>
+    <p><code>pages_read_engagement</code> is not currently in the code's scope list and needs to be added before submitting, so the recording shows the same dialog the reviewer approved.</p>
+  </div>
+
+  <h3>What each submission needs</h3>
+  <ul>
+    <li><strong>A written use case.</strong> Concrete, in plain language: "our customers connect their own Facebook Page so their support team can read and reply to Messenger conversations from one shared inbox." Vague or aspirational descriptions get rejected.</li>
+    <li><strong>A screen recording.</strong> The real flow in the live app, start to finish, with the Facebook permission dialog visible on screen. Recordings that cut away before the consent dialog are rejected automatically. One recording can cover Messenger and Instagram together.</li>
+    <li><strong>Step-by-step instructions</strong> that match the recording exactly.</li>
+    <li><strong>Working test credentials.</strong> A real login on the live app that a reviewer can use without contacting us. This account needs to already be able to reach the connect flow.</li>
+  </ul>
+  <p>References: <a href="https://developers.facebook.com/docs/app-review">developers.facebook.com/docs/app-review</a> and <a href="https://developers.facebook.com/docs/permissions">developers.facebook.com/docs/permissions</a></p>
+  <p>Expect the first submission to come back with questions. That is the normal path, and the usual cause is recording quality rather than anything wrong with the product.</p>
+</div>
+
+<h2>Step 6 &mdash; Data Protection Assessment</h2>
+<div class="step">
+  <p class="owner">Owner: engineering &middot; Arrives after approval, annually</p>
+  <p>Once the app holds Advanced Access, Meta sends an annual questionnaire covering data storage, subprocessors, encryption, access control, and retention. There is a fixed deadline, and missing it revokes access.</p>
+  <p>Unibox answers most of it well already, and the specifics are worth writing down now rather than reconstructing in a year:</p>
+  <ul>
+    <li>Access tokens, webhook secrets, and app secrets are encrypted with AES-256-GCM before they are stored, and are never displayed back to the user.</li>
+    <li>Every workspace's rows are isolated by Postgres row-level security, enforced in the database rather than the application.</li>
+    <li>Every inbound webhook is verified against the sending platform's signature; unsigned deliveries are rejected.</li>
+    <li>Subprocessors are Supabase (database and authentication) and Railway (application hosting).</li>
+  </ul>
+  <p>Reference: <a href="https://developers.facebook.com/docs/development/maintaining-data-access/data-protection-assessment">developers.facebook.com/docs/development/maintaining-data-access/data-protection-assessment</a></p>
+</div>
+
+<h2>WhatsApp: deliberately out of scope</h2>
+<p>WhatsApp already works, and nothing here changes that. It is worth being explicit about why it is excluded from this submission, because the reasoning is easy to get backwards.</p>
+<p>A customer who brings their own Meta app and their own WhatsApp Business Account can connect it to Unibox today with no review and no verification. Unibox is simply an API client using their token. The per-workspace credentials feature already supports this.</p>
+<p>Serving customers' WhatsApp accounts through <em>Unibox's own</em> app additionally requires registering as a <strong>Tech Provider</strong> and building <strong>Embedded Signup</strong>, a Meta-hosted popup that creates the account for the customer. That is a separate approval and a flow we have not written.</p>
+<p>The recommendation is to defer it. It adds an unbuilt feature, a second approval, and the app's riskiest permission, in exchange for onboarding convenience on a channel that already functions. Revisit when customers actually complain about the setup effort.</p>
+<div class="box warn">
+  <strong>Two WhatsApp limits worth knowing regardless</strong>
+  <p><strong>Token expiry.</strong> The access token shown in the Meta dashboard's API Setup screen expires after 24 hours. Production channels must use a System User token instead, or WhatsApp silently stops working the next day and looks like a bug.</p>
+  <p><strong>Messaging limits.</strong> An unverified business is capped at roughly 250 business-initiated conversations per rolling 24 hours across a maximum of 2 phone numbers. This limit follows each customer's own business, not ours. Because Unibox mostly replies inside the 24-hour customer service window, free-form replies do not count against it, so this may never be reached in practice.</p>
+</div>
+
+<h2>Sequence and timing</h2>
+<table>
+  <tr><th style="width:6%">#</th><th style="width:36%">Step</th><th style="width:22%">Owner</th><th>Rough duration</th></tr>
+  <tr><td>0</td><td>Set the four policy environment variables on Railway</td><td>Engineering</td><td>15 minutes</td></tr>
+  <tr><td>1</td><td>Register the business, gather documents</td><td>Founder / legal</td><td>Days to weeks, varies by country</td></tr>
+  <tr><td>2</td><td>Verify the domain</td><td>Engineering</td><td>Same day</td></tr>
+  <tr><td>3</td><td>Submit business verification</td><td>Founder / legal</td><td>A few business days</td></tr>
+  <tr><td>4</td><td>Link the app, fill App settings, go Live</td><td>Engineering</td><td>30 minutes</td></tr>
+  <tr><td>5</td><td>Record the demo, submit six permissions</td><td>Engineering</td><td>1&ndash;2 weeks per round</td></tr>
+  <tr><td>6</td><td>Data Protection Assessment</td><td>Engineering</td><td>Arrives later, annual</td></tr>
+</table>
+<p>Steps 1 and 2 can run in parallel. Everything from Step 3 on is strictly sequential. A realistic end-to-end estimate, assuming one App Review rejection, is six to ten weeks from having the company registration in hand.</p>
+
+<h2>What changes when it passes</h2>
+<p>No code changes. The Facebook login dialog starts working for people who hold no role on the app, which is the entire point. Customers connect their own Pages and Instagram accounts through the existing "Connect with Meta" button, and anyone who prefers to run their own Meta app can still do so through the credentials screen. Both paths keep working side by side.</p>
+
+<h2>Caveats</h2>
+<ul>
+  <li>Meta reorganises this dashboard frequently. The navigation paths and document requirements in this document are stable; specific button labels may have moved.</li>
+  <li>Verification requirements differ by country, particularly which registration documents are accepted. Check the local guidance before gathering paperwork.</li>
+  <li>The <code>pages_read_engagement</code> scope needs adding to the application before the demo is recorded. It is the only outstanding code change in this plan.</li>
+</ul>
+
+<footer>Unibox &middot; Meta business verification and App Review &middot; Prepared 7 September 2026</footer>
+
+</body>
+</html>
