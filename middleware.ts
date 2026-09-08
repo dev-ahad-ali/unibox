@@ -8,8 +8,17 @@ const PUBLIC_PREFIXES = ["/login", "/signup", "/join", "/auth", "/legal"];
 /** Auth pages a signed-in user should be bounced away from. */
 const AUTH_ONLY_PREFIXES = ["/login", "/signup"];
 
+/**
+ * The landing page. Signed-in visitors are not bounced away from it — it swaps
+ * its own Log in / Register buttons for a link to the dashboard.
+ */
+const PUBLIC_EXACT = ["/"];
+
 function isPublic(pathname: string) {
-  return PUBLIC_PREFIXES.some(prefix => pathname === prefix || pathname.startsWith(`${prefix}/`));
+  return (
+    PUBLIC_EXACT.includes(pathname) ||
+    PUBLIC_PREFIXES.some(prefix => pathname === prefix || pathname.startsWith(`${prefix}/`))
+  );
 }
 
 export async function middleware(request: NextRequest) {

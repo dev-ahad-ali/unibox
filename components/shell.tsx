@@ -1,6 +1,6 @@
 import Link from "next/link";
 import type { ReactNode } from "react";
-import { BarChart3, Compass, Inbox, KeyRound, LogOut, Radio, Users } from "lucide-react";
+import { BarChart3, Compass, Inbox, KeyRound, LayoutDashboard, LogOut, Radio, Users } from "lucide-react";
 
 import { signOut } from "@/app/(auth)/login/actions";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
@@ -10,6 +10,7 @@ import { cn } from "@/lib/utils";
 import type { Role } from "@/lib/types";
 
 const NAV = [
+    { href: "/dashboard", label: "Dashboard", Icon: LayoutDashboard, roles: ["admin", "agent", "viewer"] },
     { href: "/inbox", label: "Inbox", Icon: Inbox, roles: ["admin", "agent", "viewer"] },
     // Highlighted: it is the first stop for a new workspace, and the one entry a
     // first-time admin should notice before they open Channels.
@@ -60,7 +61,7 @@ export function AppShell({
         <div className="flex h-dvh w-full overflow-hidden bg-background">
             <nav className="hidden w-52 shrink-0 flex-col border-r border-sidebar-border bg-sidebar text-sidebar-foreground md:flex">
                 <Link
-                    href="/"
+                    href="/dashboard"
                     className="flex h-14 items-center gap-2 border-b border-sidebar-border px-4"
                 >
                     <span className="size-2 rounded-full bg-primary" aria-hidden />
