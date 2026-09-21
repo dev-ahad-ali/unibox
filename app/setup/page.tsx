@@ -7,8 +7,13 @@ import { PlatformIcon, platformLabel } from "@/components/platform-badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { findWhatsAppBusinessAccountId } from "@/lib/adapters/whatsapp";
+import { graphUrl } from "@/lib/adapters/graph";
 import { appUrl } from "@/lib/app-url";
 import { requireSession } from "@/lib/auth";
+import { getMetaCredentialsSummary } from "@/lib/meta-app";
+import { authorizeChannel, findChannelByPlatform } from "@/lib/store";
+import { createServiceClient, isSupabaseConfigured } from "@/lib/supabase";
 import { platforms, type Platform } from "@/lib/types";
 import { InstagramGuide, LineGuide, MessengerGuide, TelegramGuide, WhatsAppGuide, type SetupUrls } from "./guides";
 
@@ -52,6 +57,37 @@ const ESSENTIALS = [
   }
 ] as const;
 
+/**
+ * Real values for the WhatsApp subscribe command, so admins can paste it as-is.
+ * The WABA id comes from the connected WhatsApp channel, and the verify token
+ * from the credentials screen, which already shows it to admins. The access
+ * token is left as a placeholder: stored tokens never leave the server.
+ * Agents get placeholders only.
+ */
+async function whatsappSubscribeValues(orgId: string, isAdmin: boolean) {
+  const placeholders = { wabaId: "<WABA_ID>", verifyToken: "<YOUR_VERIFY_TOKEN>" };
+  if (!isAdmin || !isSupabaseConfigured()) {
+    return { endpoint: graphUrl(`${placeholders.wabaId}/subscribed_apps`), verifyToken: placeholders.verifyToken };
+  }
+
+  const db = createServiceClient();
+  const [summary, channel] = await Promise.all([
+    getMetaCredentialsSummary(orgId),
+    findChannelByPlatform(db, orgId, "whatsapp")
+  ]);
+
+  let wabaId: string | undefined;
+  if (channel) {
+    const token = (await authorizeChannel(db, channel)).credentials.accessToken;
+    wabaId = token ? await findWhatsAppBusinessAccountId(token, channel.externalAccountId) : undefined;
+  }
+
+  return {
+    endpoint: graphUrl(`${wabaId ?? placeholders.wabaId}/subscribed_apps`),
+    verifyToken: summary.verifyToken || placeholders.verifyToken
+  };
+}
+
 function pickPlatform(value?: string | string[]): Platform {
   const candidate = typeof value === "string" ? value : undefined;
   return (platforms as readonly string[]).includes(candidate ?? "") ? (candidate as Platform) : "messenger";
@@ -70,13 +106,16 @@ export default async function SetupPage({
   // against but every tenant's.
   const scoped = (platform: string) => appUrl(`/api/webhooks/${platform}?org=${member.orgId}`);
 
+  const whatsappSubscribe = await whatsappSubscribeValues(member.orgId, member.role === "admin");
+
   const urls: SetupUrls = {
     messenger: scoped("messenger"),
     instagram: scoped("instagram"),
     whatsapp: scoped("whatsapp"),
     line: appUrl("/api/webhooks/line"),
     telegram: appUrl("/api/webhooks/telegram"),
-    metaCallback: appUrl("/admin/channels/connect/meta/callback")
+    metaCallback: appUrl("/admin/channels/connect/meta/callback"),
+    whatsappSubscribe
   };
 
   return (

@@ -22,6 +22,7 @@ import {
   TokenAnatomy
 } from "@/components/setup/art";
 import { Button } from "@/components/ui/button";
+import { CopyButton } from "@/components/ui/copy-button";
 
 export type SetupUrls = {
   messenger: string;
@@ -30,6 +31,8 @@ export type SetupUrls = {
   line: string;
   telegram: string;
   metaCallback: string;
+  /** The subscribe command's endpoint and verify token, pre-filled where known. */
+  whatsappSubscribe: { endpoint: string; verifyToken: string };
 };
 
 function GoConnect({ children = "Open Channels and connect" }: Readonly<{ children?: string }>) {
@@ -387,6 +390,11 @@ export function InstagramGuide({ urls }: Readonly<{ urls: SetupUrls }>) {
 /* ------------------------------------------------------------------------ */
 
 export function WhatsAppGuide({ urls }: Readonly<{ urls: SetupUrls }>) {
+  const subscribeCommand = `curl -X POST "${urls.whatsappSubscribe.endpoint}" \\
+  -H "Authorization: Bearer <ACCESS_TOKEN>" \\
+  -d "override_callback_uri=${urls.whatsapp}" \\
+  -d "verify_token=${urls.whatsappSubscribe.verifyToken}"`;
+
   return (
     <div className="space-y-6">
       <GuideHeader title="WhatsApp Business" time="≈ 20 minutes" approval="Free test number, no payment to try">
@@ -475,11 +483,16 @@ export function WhatsAppGuide({ urls }: Readonly<{ urls: SetupUrls }>) {
           <Callout tone="tip" title="Dashboard asks for a payment method first?">
             Meta's newer layout sometimes hides the webhook form inside a Production setup wizard that wants a card.
             The card is for a real number, not for webhooks. Skip the wizard by subscribing over the API instead:
-            <pre className="mt-2 overflow-x-auto rounded-md bg-secondary p-2 font-mono text-[11px] leading-relaxed text-foreground">{`curl -X POST "https://graph.facebook.com/v26.0/<WABA_ID>/subscribed_apps" \\
-  -H "Authorization: Bearer <ACCESS_TOKEN>" \\
-  -d "override_callback_uri=${urls.whatsapp}" \\
-  -d "verify_token=<YOUR_VERIFY_TOKEN>"`}</pre>
-            A <code>{'{"success":true}'}</code> reply means Meta already called Unibox and accepted the verification.
+            <div className="relative mt-2">
+              <pre className="overflow-x-auto rounded-md bg-secondary p-2 pr-20 font-mono text-[11px] leading-relaxed text-foreground">{subscribeCommand}</pre>
+              <div className="absolute right-1.5 top-1.5">
+                <CopyButton value={subscribeCommand} />
+              </div>
+            </div>
+            Replace <code>&lt;ACCESS_TOKEN&gt;</code> with the WhatsApp token from step 1 — Unibox never shows stored
+            tokens back. The WABA id and verify token are filled in from this workspace once a WhatsApp number is
+            connected and a verify token is saved. A <code>{'{"success":true}'}</code> reply means Meta already called
+            Unibox and accepted the verification.
           </Callout>
         </Step>
 

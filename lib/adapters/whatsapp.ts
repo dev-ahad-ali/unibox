@@ -233,3 +233,64 @@ export async function resolveWhatsAppMedia(channel: AuthorizedChannel, mediaId: 
 
   return { url: data.url, mimeType: data.mime_type, accessToken: token };
 }
+
+type IdList = { data?: Array<{ id?: string }> };
+
+/**
+ * Finds the WhatsApp Business Account a phone number belongs to. The Cloud API
+ * sends to the phone number id, so that is all a channel stores — but webhook
+ * subscriptions are made on the WABA. Returns undefined rather than throwing:
+ * callers only use this to pre-fill values for the admin.
+ */
+export async function findWhatsAppBusinessAccountId(token: string, phoneNumberId: string) {
+  const ownsNumber = async (wabaId: string) => {
+    const numbers = await graphRequest<IdList>(`${wabaId}/phone_numbers?fields=id&limit=100`, {
+      method: "GET",
+      accessToken: token
+    });
+    return (numbers.data ?? []).some(entry => entry.id === phoneNumberId);
+  };
+
+  const candidates = new Set<string>();
+
+  // A System User token names the WABAs it was granted in its own granular
+  // scopes. A token may inspect itself, so no app token is needed.
+  try {
+    const debug = await graphRequest<{
+      data?: { granular_scopes?: Array<{ scope?: string; target_ids?: string[] }> };
+    }>(`debug_token?input_token=${encodeURIComponent(token)}`, { method: "GET", accessToken: token });
+    for (const entry of debug.data?.granular_scopes ?? []) {
+      if (entry.scope?.startsWith("whatsapp_business_")) {
+        for (const id of entry.target_ids ?? []) candidates.add(id);
+      }
+    }
+  } catch {
+    // Fall through to walking the businesses below.
+  }
+
+  // User tokens with full access carry no target ids; walk their businesses.
+  if (candidates.size === 0) {
+    try {
+      const businesses = await graphRequest<IdList>("me/businesses?limit=50", { method: "GET", accessToken: token });
+      for (const business of businesses.data ?? []) {
+        if (!business.id) continue;
+        for (const edge of ["owned_whatsapp_business_accounts", "client_whatsapp_business_accounts"]) {
+          const wabas = await graphRequest<IdList>(`${business.id}/${edge}?limit=50`, {
+            method: "GET",
+            accessToken: token
+          }).catch(() => ({ data: [] }) as IdList);
+          for (const waba of wabas.data ?? []) if (waba.id) candidates.add(waba.id);
+        }
+      }
+    } catch {
+      return undefined;
+    }
+  }
+
+  for (const wabaId of candidates) {
+    if (await ownsNumber(wabaId).catch(() => false)) {
+      return wabaId;
+    }
+  }
+  return undefined;
+}
