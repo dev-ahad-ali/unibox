@@ -60,7 +60,7 @@ export default async function ChannelsPage({
       }}
     >
       <div className="flex max-w-3xl flex-col gap-6">
-        <LiveSetupRefresh />
+        <LiveSetupRefresh orgId={member.orgId} />
         <p className="rounded-lg border border-primary/30 bg-primary/5 px-3 py-2 text-xs text-muted-foreground">
           First time here? The{" "}
           <Link href="/setup" className="font-medium text-primary underline underline-offset-2">

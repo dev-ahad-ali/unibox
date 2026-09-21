@@ -8,7 +8,12 @@
  * configuration, not something a request can tell us.
  */
 export function appBaseUrl() {
-  return (process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000").replace(/\/+$/, "");
+  // On Vercel the production domain is known without configuration. Preview
+  // deployments still resolve to it, which is what webhook and OAuth URLs need.
+  const vercelHost =
+    process.env.VERCEL_PROJECT_PRODUCTION_URL || process.env.NEXT_PUBLIC_VERCEL_PROJECT_PRODUCTION_URL;
+  const fallback = vercelHost ? `https://${vercelHost}` : "http://localhost:3000";
+  return (process.env.NEXT_PUBLIC_APP_URL || fallback).replace(/\/+$/, "");
 }
 
 /** Absolute URL for an app-relative path, e.g. appUrl("/admin/channels"). */

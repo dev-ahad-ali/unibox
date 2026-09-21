@@ -2,7 +2,6 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Clock, Inbox as InboxIcon } from "lucide-react";
-import { type Socket } from "socket.io-client";
 
 import { Composer } from "@/components/composer";
 import { PlatformBadge, PlatformIcon, platformLabel } from "@/components/platform-badge";
@@ -12,7 +11,7 @@ import { Separator } from "@/components/ui/separator";
 import { StatusDot } from "@/components/ui/status-dot";
 import { formatDateTime, formatTime, initials } from "@/lib/format";
 import { isWithinServiceWindow, serviceWindowHoursLeft } from "@/lib/service-window";
-import { getSocket } from "@/lib/socket-client";
+import { onOrgEvent } from "@/lib/realtime-client";
 import { cn } from "@/lib/utils";
 import {
   platforms,
@@ -42,6 +41,7 @@ export type InboxInitialData = {
   initialStatus?: string;
   initialPlatform?: Platform;
   canReply: boolean;
+  orgId: string;
 };
 
 function syncUrl(params: Record<string, string | undefined>) {
@@ -83,8 +83,8 @@ export function InboxClient({ initial }: Readonly<{ initial: InboxInitialData }>
   );
   const [bundleLoading, setBundleLoading] = useState(false);
 
-  // The socket handlers read current state; a ref avoids re-subscribing the
-  // socket on every state change.
+  // The live-event handlers read current state; a ref avoids re-subscribing
+  // on every state change.
   const stateRef = useRef({ conversations, bundles, activeId });
   stateRef.current = { conversations, bundles, activeId };
 
@@ -106,7 +106,7 @@ export function InboxClient({ initial }: Readonly<{ initial: InboxInitialData }>
         setConversations(prev => sortByActivity(upsertConversation(prev, data.conversation!)));
       }
     } catch {
-      // Network hiccup: the next socket event or manual switch retries.
+      // Network hiccup: the next live event or manual switch retries.
     }
   }, []);
 
@@ -137,11 +137,9 @@ export function InboxClient({ initial }: Readonly<{ initial: InboxInitialData }>
     [status, platform, fetchBundle]
   );
 
-  // Live updates. The org room is server-assigned from the access token.
+  // Live updates. The org topic is private; Supabase only admits members.
+  const orgId = initial.orgId;
   useEffect(() => {
-    let client: Socket | null = null;
-    let cancelled = false;
-
     const onNewMessage = (payload: { conversationId?: string; message?: Message }) => {
       const { conversationId, message } = payload ?? {};
       if (!conversationId || !message) {
@@ -209,23 +207,16 @@ export function InboxClient({ initial }: Readonly<{ initial: InboxInitialData }>
       });
     };
 
-    void getSocket().then(instance => {
-      if (cancelled) {
-        return;
-      }
-      client = instance;
-      client.on("new_message", onNewMessage);
-      client.on("conversation_updated", onConversationUpdated);
-      client.on("message_status", onMessageStatus);
-    });
+    const unsubscribers = [
+      onOrgEvent(orgId, "new_message", onNewMessage),
+      onOrgEvent(orgId, "conversation_updated", onConversationUpdated),
+      onOrgEvent(orgId, "message_status", onMessageStatus)
+    ];
 
     return () => {
-      cancelled = true;
-      client?.off("new_message", onNewMessage);
-      client?.off("conversation_updated", onConversationUpdated);
-      client?.off("message_status", onMessageStatus);
+      for (const unsubscribe of unsubscribers) unsubscribe();
     };
-  }, [fetchBundle, refreshList]);
+  }, [orgId, fetchBundle, refreshList]);
 
   const visibleConversations = useMemo(
     () =>

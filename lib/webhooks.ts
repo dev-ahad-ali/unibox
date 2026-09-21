@@ -12,7 +12,7 @@ import {
 import { isMetaPlatform, resolveMetaAppSecrets } from "@/lib/meta-app";
 import { createServiceClient, isSupabaseConfigured, type Db } from "@/lib/supabase";
 import type { Channel, Platform } from "@/lib/types";
-import { emitOrgEvent, emitConversationEvent } from "@/lib/socket";
+import { broadcastToOrg, broadcastToOrgs, runAfterResponse, type OrgEvent } from "@/lib/realtime";
 
 export async function processWebhook(platform: Platform, request: Request) {
   const adapter = getAdapter(platform);
@@ -28,7 +28,7 @@ export async function processWebhook(platform: Platform, request: Request) {
   try {
     payload = rawBody ? JSON.parse(rawBody) : {};
   } catch {
-    void logWebhookEvent(logDb, { platform, outcome: "malformed" });
+    runAfterResponse(() => logWebhookEvent(logDb, { platform, outcome: "malformed" }));
     return Response.json({ error: "Malformed webhook payload" }, { status: 400 });
   }
 
@@ -52,11 +52,9 @@ export async function processWebhook(platform: Platform, request: Request) {
     : undefined;
 
   if (!(await adapter.verifyWebhook({ request, rawBody, secret: channelSecret, appSecrets }))) {
-    void logWebhookEvent(logDb, {
-      platform,
-      externalAccountId: accountHint,
-      outcome: "invalid_signature"
-    });
+    runAfterResponse(() =>
+      logWebhookEvent(logDb, { platform, externalAccountId: accountHint, outcome: "invalid_signature" })
+    );
     return Response.json({ error: "Invalid webhook signature" }, { status: 401 });
   }
 
@@ -81,6 +79,8 @@ export async function processWebhook(platform: Platform, request: Request) {
   let ingested = 0;
   let duplicates = 0;
   const profileLookups: Array<Promise<void>> = [];
+  // Live updates go out in one batch after the platform has its 200.
+  const events: OrgEvent[] = [];
 
   for (const event of messages) {
     const channel = await resolveChannel(event.accountId);
@@ -115,15 +115,10 @@ export async function processWebhook(platform: Platform, request: Request) {
 
     ingested += 1;
 
-    emitConversationEvent(conversation.id, "new_message", {
-      platform,
-      conversationId: conversation.id,
-      message
-    });
-    emitOrgEvent(channel.orgId, "new_message", {
-      platform,
-      conversationId: conversation.id,
-      message
+    events.push({
+      orgId: channel.orgId,
+      event: "new_message",
+      payload: { platform, conversationId: conversation.id, message }
     });
 
     // Profile enrichment is a second round-trip to the platform. It must not
@@ -140,16 +135,16 @@ export async function processWebhook(platform: Platform, request: Request) {
     // the next full refresh. The client store patches them in place instead.
     const channel = await resolveChannel(receipt.accountId);
     if (channel) {
-      emitOrgEvent(channel.orgId, "message_status", {
-        platform,
-        platformMessageId: receipt.platformMessageId,
-        status: receipt.status
+      events.push({
+        orgId: channel.orgId,
+        event: "message_status",
+        payload: { platform, platformMessageId: receipt.platformMessageId, status: receipt.status }
       });
     }
   }
 
   for (const orgId of orgIds) {
-    emitOrgEvent(orgId, "webhook_received", { platform, count: ingested });
+    events.push({ orgId, event: "webhook_received", payload: { platform, count: ingested } });
   }
 
   // The delivery log is what the channels screen's health line reads. An empty
@@ -158,7 +153,7 @@ export async function processWebhook(platform: Platform, request: Request) {
   // customer message.
   const loggedChannel =
     (await resolveChannel(messages[0]?.accountId ?? statuses[0]?.accountId ?? accountHint)) ?? undefined;
-  void logWebhookEvent(logDb, {
+  const logged = logWebhookEvent(logDb, {
     platform,
     externalAccountId: accountHint ?? messages[0]?.accountId,
     channelId: loggedChannel?.id,
@@ -177,11 +172,11 @@ export async function processWebhook(platform: Platform, request: Request) {
   // A message-less but signed call (LINE's Verify button) still notifies the
   // org room, so the channels screen can flip its setup check live.
   if (loggedChannel && !orgIds.has(loggedChannel.orgId)) {
-    emitOrgEvent(loggedChannel.orgId, "webhook_received", { platform, count: 0 });
+    events.push({ orgId: loggedChannel.orgId, event: "webhook_received", payload: { platform, count: 0 } });
   }
 
-  // Deliberately not awaited — the platform needs its 200 quickly.
-  void Promise.allSettled(profileLookups);
+  // Deliberately after the response — the platform needs its 200 quickly.
+  runAfterResponse(() => Promise.allSettled([logged, broadcastToOrgs(events), ...profileLookups]));
 
   return Response.json({ ok: true, processed: ingested, duplicates, statuses: statuses.length });
 }
@@ -207,7 +202,7 @@ async function enrichContact(
       contactName: profile.name,
       contactAvatarUrl: profile.avatarUrl
     });
-    emitConversationEvent(conversationId, "conversation_updated", { conversationId });
+    await broadcastToOrg(channel.orgId, "conversation_updated", { conversationId });
   } catch {
     // A failed profile lookup must never turn into a failed webhook — the
     // conversation keeps the platform id as its display name.

@@ -14,6 +14,7 @@ Built from the specification in [`docs/base.md`](docs/base.md).
 - [Setup](#setup)
 - [Environment variables](#environment-variables)
 - [Database setup](#database-setup)
+- [Deploying to Vercel](#deploying-to-vercel)
 - [Workspace credentials](#workspace-credentials)
 - [Connecting channels](#connecting-channels)
 - [Receiving messages: webhooks](#receiving-messages-webhooks)
@@ -30,7 +31,7 @@ Built from the specification in [`docs/base.md`](docs/base.md).
 
 - **One inbox, five platforms.** Messenger, Instagram, WhatsApp, LINE, and Telegram conversations in a single list, filterable by channel and status.
 - **Real two-way messaging.** Inbound webhooks write to Postgres; replies go back out through each platform's own API.
-- **Live updates.** Socket.io pushes new messages to open browsers without a refresh.
+- **Live updates.** Supabase Realtime pushes new messages to open browsers without a refresh.
 - **Multi-tenant from day one.** Every row is scoped to an organization, enforced by Postgres row-level security.
 - **Roles.** Admins manage the workspace, agents answer messages, viewers read and report.
 - **Credentials encrypted at rest.** Platform tokens are AES-256-GCM encrypted and unreadable to anyone but the server.
@@ -118,7 +119,8 @@ The pill in the top-right shows the realtime connection: **live**, **connecting*
 | Framework | Next.js 15 (App Router, React 19, server components) |
 | Database | Supabase Postgres, with row-level security |
 | Auth | Supabase Auth (email + password), cookie sessions via `@supabase/ssr` |
-| Realtime | Socket.io on a custom Node server (`server.js`) |
+| Realtime | Supabase Realtime Broadcast, one private topic per org |
+| Hosting | Any Next.js host; no long-running process needed (see [Deploying to Vercel](#deploying-to-vercel)) |
 | UI | Tailwind CSS v4 + shadcn/ui, warm neutral + indigo theme (Plus Jakarta Sans), dark by default |
 | Language | TypeScript, strict |
 
@@ -192,19 +194,12 @@ pnpm dev                       # http://localhost:3000
 
 | Script | Does |
 | --- | --- |
-| `pnpm dev` | Dev server with Socket.io attached |
+| `pnpm dev` | Dev server |
 | `pnpm build` | Production build |
 | `pnpm start` | Production server |
 | `pnpm typecheck` | `tsc --noEmit` |
 
-`pnpm dev` runs `server.js`, not `next dev` — the custom server is what attaches Socket.io to the same port.
-
-On start it prints which mode it is in:
-
-```
-[unibox] Supabase configured — sessions and socket auth are active.
-[unibox] Supabase is not configured — running in demo mode with no auth.
-```
+Without the Supabase variables the app runs in demo mode: sample data, no auth, and no live updates.
 
 ---
 
@@ -216,7 +211,7 @@ Copy `.env.example` to `.env.local`. It is gitignored, along with `.env.*`.
 
 | Variable | Required | Purpose |
 | --- | --- | --- |
-| `NEXT_PUBLIC_APP_URL` | yes | Public base URL. Must match what you register as webhook and OAuth callback URLs. |
+| `NEXT_PUBLIC_APP_URL` | yes | Public base URL. Must match what you register as webhook and OAuth callback URLs. On Vercel it defaults to the project's production domain. |
 | `NEXT_PUBLIC_SUPABASE_URL` | yes | Supabase project URL. |
 | `NEXT_PUBLIC_SUPABASE_ANON_KEY` | yes | Browser-safe key. Auth and all RLS-enforced reads use it. |
 | `SUPABASE_SERVICE_ROLE_KEY` | yes | Bypasses RLS. Server-only — never expose it. |
@@ -264,7 +259,7 @@ Filled into the privacy policy, terms, and data deletion pages at `/legal/*`. No
 Run these in the Supabase SQL editor, in order:
 
 1. **`supabase/schema.sql`** — tables and indexes.
-2. **`supabase/rls.sql`** — row-level security, helper functions, column grants.
+2. **`supabase/rls.sql`** — row-level security, helper functions, column grants, and the policy that authorizes live updates.
 3. `supabase/seed.sql` — optional, only if you want to insert a channel by hand.
 
 Both are idempotent, so re-run them after pulling changes. Order matters: `rls.sql` references the `org_invites` table that `schema.sql` creates.
@@ -286,6 +281,23 @@ Worth knowing if you are adapting `rls.sql`:
 1. **Infinite recursion.** `current_org_id()` reads `org_users`, and the policy on `org_users` calls it — so the lookup was subject to the policy that invoked it. Postgres aborts with *infinite recursion detected in policy for relation org_users*. The helpers now run as `SECURITY DEFINER` with a pinned `search_path`.
 
 2. **`FOR ALL` silently granted `SELECT`.** Permissive policies are OR'd together, so `"admins and agents can manage conversations" FOR ALL` gave every agent read access to *every* conversation in the org — making the carefully written visibility rule directly above it dead code. Reads and writes are now separate policies.
+
+---
+
+## Deploying to Vercel
+
+Unibox is a plain Next.js app. Live updates go through Supabase Realtime, so nothing needs a long-running server.
+
+1. **Prepare Supabase.** Run `supabase/schema.sql` and then `supabase/rls.sql`. In **Project Settings → Realtime**, turn off **Allow public access**, so channels can only be private.
+2. **Import the repo** at [vercel.com/new](https://vercel.com/new). It detects Next.js and pnpm, and the defaults are correct.
+3. **Add environment variables** from [Environment variables](#environment-variables). Also add `ENABLE_EXPERIMENTAL_COREPACK=1`, so Vercel uses the pnpm version pinned in `package.json`.
+   - `NEXT_PUBLIC_APP_URL` is optional on Vercel. If you leave it unset, it defaults to the production domain (`https://<project>.vercel.app`). Set it when you add a custom domain.
+4. **Deploy.** Then point everything at the new domain:
+   - Meta: the webhook callback URLs, the OAuth redirect (`/admin/channels/connect/meta/callback`), and the privacy, terms, and data deletion URLs.
+   - Telegram and LINE: reconnect each channel, or update its webhook URL, so the platform calls the new address.
+   - Supabase **Authentication → URL Configuration**: the Site URL and redirect URLs.
+
+Vercel's free Hobby plan is for non-commercial use. Once Unibox has paying customers, move to Pro or to another Next.js host. Cloudflare Workers can run it with the `@opennextjs/cloudflare` adapter. A custom domain means the next move only needs a DNS change.
 
 ---
 
@@ -398,8 +410,8 @@ Then set `NEXT_PUBLIC_APP_URL` to the tunnel URL, restart the dev server, and re
 4. Skips any message whose `platform_message_id` is already stored.
 5. Upserts the conversation and inserts the message.
 6. Applies delivery/read receipts to previously sent messages.
-7. Emits Socket.io events to the org and conversation rooms.
-8. Returns 200 immediately. Contact profile lookups run detached, because a slow enrichment call must never delay the acknowledgement.
+7. Returns 200 immediately.
+8. After the response: broadcasts live events to the org's Realtime topic, writes the delivery log, and looks up contact profiles. These run through Next's `after()`, so a slow enrichment call never delays the acknowledgement and a serverless host does not freeze the work half-done.
 
 **Signature verification is mandatory.** If `META_APP_SECRET` or `LINE_CHANNEL_SECRET` is unset, that webhook rejects everything rather than accepting unsigned payloads — an unsigned webhook endpoint lets anyone inject messages into your inbox.
 
@@ -620,7 +632,7 @@ Three independent layers, so a bug in one does not open the app:
 
 **The service role key is used in exactly four places**, each documented at the call site: webhook ingestion, signup (the org must exist before you can be a member of it), invite acceptance (the invitee is not a member yet), and decrypting channel credentials to send.
 
-**Socket rooms are server-assigned.** The client sends its access token in the handshake and the server derives the room from it — a client cannot ask to join another workspace's room.
+**Live topics are private.** Each org's events go to the Realtime topic `org:<org id>`. Joining it requires a signed-in session whose org matches, enforced by a policy on `realtime.messages`; there is no insert policy, so browsers cannot publish. Only the server, with the service role, sends events.
 
 **Other properties:** `?next=` is validated as a relative path so it cannot become an open redirect; invite tokens are 256-bit, single-use, and expire in 7 days; OAuth state is compared in constant time; platform tokens are AES-256-GCM encrypted before reaching Postgres.
 
@@ -628,8 +640,8 @@ Three independent layers, so a bug in one does not open the app:
 
 ## Troubleshooting
 
-**"Supabase is not configured" on startup, but my env vars are set.**
-Restart the server. `.env.local` is read at startup, and `pnpm dev` loads it during Next's prepare step.
+**The app runs in demo mode, but my env vars are set.**
+Restart the dev server; `.env.local` is read at startup. On Vercel, redeploy after changing variables — `NEXT_PUBLIC_*` values are baked in at build time.
 
 **Inbox is empty and the log says `column conversations.last_inbound_at does not exist`.**
 Run `supabase/schema.sql`. When Supabase is configured but a query fails, the app returns empty results and logs the cause rather than substituting demo rows — a silent fallback makes a broken query look like an empty inbox.
@@ -640,8 +652,8 @@ Almost always the webhook. Check the URL is registered and reachable, the verify
 **Replies fail with "Session has expired".**
 The Meta token expired. Temporary API Setup tokens last 24 hours; OAuth user tokens about 60 days. Reconnect the channel, or press **Test** to confirm.
 
-**The socket pill says offline.**
-In a Supabase-configured deployment the handshake requires a valid access token. Confirm you are signed in; the app still works, you just need to refresh for new messages.
+**The live pill says offline.**
+Run `supabase/rls.sql` — without its `realtime.messages` policy, Supabase refuses the private topic. Also confirm you are signed in. The app still works while offline; you just refresh to see new messages.
 
 **`Unknown path components: /me` from the Graph API.**
 `META_GRAPH_API_VERSION` is set past what Meta recognizes. `v26.0` is the current maximum; anything higher is parsed as part of the path.

@@ -2,9 +2,8 @@
 
 import { useEffect } from "react";
 import { useRouter } from "next/navigation";
-import { type Socket } from "socket.io-client";
 
-import { getSocket } from "@/lib/socket-client";
+import { onOrgEvent } from "@/lib/realtime-client";
 
 /**
  * Re-renders the channels screen when a webhook lands, so the setup checks
@@ -12,27 +11,10 @@ import { getSocket } from "@/lib/socket-client";
  * watches it happen instead of mashing reload to find out whether their
  * webhook registration worked.
  */
-export function LiveSetupRefresh() {
+export function LiveSetupRefresh({ orgId }: Readonly<{ orgId: string }>) {
   const router = useRouter();
 
-  useEffect(() => {
-    let client: Socket | null = null;
-    let cancelled = false;
-    const onEvent = () => router.refresh();
-
-    void getSocket().then(instance => {
-      if (cancelled) {
-        return;
-      }
-      client = instance;
-      client.on("webhook_received", onEvent);
-    });
-
-    return () => {
-      cancelled = true;
-      client?.off("webhook_received", onEvent);
-    };
-  }, [router]);
+  useEffect(() => onOrgEvent(orgId, "webhook_received", () => router.refresh()), [orgId, router]);
 
   return null;
 }

@@ -388,3 +388,22 @@ using (current_org_role() = 'admin' and org_id = current_org_id());
 -- RLS stays enabled to make that denial explicit rather than incidental.
 alter table deletion_requests enable row level security;
 revoke all on deletion_requests from anon, authenticated;
+
+-- ---------------------------------------------------------------------------
+-- realtime.messages (live updates)
+-- ---------------------------------------------------------------------------
+-- The inbox listens on a private Broadcast topic per org, `org:<org id>`. The
+-- server publishes with the service role, which bypasses these checks. A
+-- browser may only join the topic of its own org, and there is no insert
+-- policy, so no browser can publish into any topic — events can only come from
+-- the server. Also turn off "Allow public access" under Realtime settings so
+-- private topics are the only kind.
+drop policy if exists "org members can receive their org's live events" on realtime.messages;
+create policy "org members can receive their org's live events"
+on realtime.messages
+for select
+to authenticated
+using (
+  realtime.messages.extension = 'broadcast'
+  and (select realtime.topic()) = 'org:' || public.current_org_id()::text
+);

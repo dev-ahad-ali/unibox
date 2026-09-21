@@ -1,5 +1,5 @@
 import { AppShell } from "@/components/shell";
-import { SocketStatus } from "@/components/socket-status";
+import { LiveStatus } from "@/components/live-status";
 import { getConversationBundle, getInboxLists, summarizeInbox } from "@/lib/store";
 import { canReply, requireSession } from "@/lib/auth";
 import { isPlatform } from "@/lib/types";
@@ -64,7 +64,7 @@ export default async function InboxPage({ searchParams }: InboxPageProps) {
         organizationName: organization.name,
         isDemo: session.isDemo
       }}
-      actions={<SocketStatus orgId={member.orgId} />}
+      actions={<LiveStatus orgId={member.orgId} />}
     >
       <InboxClient
         initial={{
@@ -75,7 +75,8 @@ export default async function InboxPage({ searchParams }: InboxPageProps) {
           initialBundle: bundle ? { messages: bundle.messages, notes: bundle.notes } : null,
           initialStatus: status,
           initialPlatform: activePlatform,
-          canReply: canReply(member.role)
+          canReply: canReply(member.role),
+          orgId: member.orgId
         }}
       />
     </AppShell>

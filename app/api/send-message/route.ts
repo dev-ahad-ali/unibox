@@ -3,7 +3,7 @@ import { canReply, getSession } from "@/lib/auth";
 import { isWithinServiceWindow } from "@/lib/service-window";
 import { authorizeChannel, findChannel, findConversation, insertMessage } from "@/lib/store";
 import { createServiceClient } from "@/lib/supabase";
-import { emitConversationEvent, emitOrgEvent } from "@/lib/socket";
+import { broadcastToOrgs, runAfterResponse } from "@/lib/realtime";
 
 export async function POST(request: Request) {
   const session = await getSession();
@@ -82,8 +82,14 @@ export async function POST(request: Request) {
     status: "sent"
   });
 
-  emitConversationEvent(conversation.id, "new_message", { conversationId: conversation.id, message });
-  emitOrgEvent(conversation.orgId, "conversation_updated", { conversationId: conversation.id });
+  // Other agents' inboxes pick the reply up live; the sender's own client adds
+  // it from this response and skips the duplicate by id.
+  runAfterResponse(() =>
+    broadcastToOrgs([
+      { orgId: conversation.orgId, event: "new_message", payload: { conversationId: conversation.id, message } },
+      { orgId: conversation.orgId, event: "conversation_updated", payload: { conversationId: conversation.id } }
+    ])
+  );
 
   return Response.json({ ok: true, message });
 }
